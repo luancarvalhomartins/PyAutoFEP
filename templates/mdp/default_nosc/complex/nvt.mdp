@@ -1,0 +1,44 @@
+define      = -DPOSRES_LIG
+
+; Run parameters
+integrator  = md
+nsteps      = 100000
+dt          = 0.002
+
+; Output control 
+nstxout     = 0
+nstvout     = 0
+nstenergy   = 0
+nstlog      = 0
+nstxtcout   = 0
+
+; Bond parameters
+continuation    = yes
+constraint-algorithm = lincs
+constraints     = h-bonds
+lincs-iter      = 1
+lincs-order     = 4
+
+; Neighborsearching
+ns-type                 = grid
+cutoff-scheme           = Verlet
+
+; Electrostatics
+coulombtype     = PME
+pme-order       = 4
+fourierspacing  = 0.16
+
+; Temperature coupling
+tcoupl      = V-rescale     
+tc-grps     = Protein_LIG   Water_and_Ions
+tau-t       = 0.1           0.1
+ref-t       = 298.15        298.15
+
+; Periodic boundary conditions
+pbc         = xyz      
+
+; Dispersion correction
+DispCorr    = EnerPres 
+
+; Velocity generation
+gen-vel     = no

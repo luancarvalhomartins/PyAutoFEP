@@ -1,0 +1,39 @@
+define      = -DPOSRES_PROTEIN -DPOSRES_LIG
+
+; Run parameters
+integrator  = md
+nsteps      = 100000
+dt          = 0.002
+
+; Output control 
+nstxout     = 0
+nstvout     = 0
+nstenergy   = 0
+nstlog      = 0
+nstxtcout   = 0
+
+; Bond parameters
+continuation    = no
+constraint-algorithm = lincs
+constraints     = h-bonds
+lincs-iter      = 1
+lincs-order     = 4
+
+; Neighborsearching
+ns-type                 = grid
+cutoff-scheme           = Verlet
+
+; Electrostatics
+coulombtype     = PME
+pme-order       = 4
+fourierspacing  = 0.16
+
+; Periodic boundary conditions
+pbc         = xyz
+
+; Dispersion correction
+DispCorr    = EnerPres
+
+; Velocity generation
+gen-vel     = yes
+gen-temp    = 298.15

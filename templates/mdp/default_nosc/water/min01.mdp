@@ -1,0 +1,33 @@
+; Run parameters
+integrator   = steep
+emtol        = 1000.0  
+emstep       = 0.001   
+nsteps       = 50000
+
+; Output control
+nstxout     = 0       
+nstvout     = 0       
+nstenergy   = 0       
+nstlog      = 0       
+
+; Bond parameters
+continuation    = no        
+constraint-algorithm = lincs
+constraints     = h-bonds
+lincs-iter      = 1
+lincs-order     = 4
+
+; Neighborsearching
+ns-type                 = grid
+cutoff-scheme           = Verlet
+
+; Electrostatics
+coulombtype     = PME      
+pme-order       = 4
+fourierspacing  = 0.16     
+
+; Periodic boundary conditions
+pbc         = xyz
+
+; Dispersion correction
+DispCorr    = EnerPres

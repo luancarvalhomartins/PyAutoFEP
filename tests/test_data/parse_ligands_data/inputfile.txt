@@ -1,0 +1,5 @@
+# Comment
+FXR_10 = FXR_10.mol2, FXR_10.top
+
+
+FXR_12 = FXR_12.mol2, FXR_12.top 
