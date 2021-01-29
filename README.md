@@ -14,9 +14,9 @@ provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in 
 - [rdkit](https://www.rdkit.org/) 2019.03+
 - [networkx](https://networkx.org) 2.3
 - [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3 & [pymbar](https://github.com/choderalab/pymbar) 3.0.4
-- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in \myscriptstyle{prepare\_perturbation\_map.py})
-- matplotlib (required only for analysis)
-- numpy (required only for analysis)
+- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*)
+- matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation map*)
+- numpy (required only in *analyze_results.py*)
 
 Optional requirements. The following are not required to run basic calculations in PyAutoFEP, but are needed for specific functions.
 
