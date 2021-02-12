@@ -2379,7 +2379,7 @@ if __name__ == '__main__':
                                    help='One of the preset lambda schemes (Default: lambda12) or a dictionary of '
                                         'lambda values or input file containing lambda values')
     perturbation_opts.add_argument('--template_mdp', type=str, default=None,
-                                   choices=['default_nosc', 'default_sc', 'charmm_nosc', 'default_sc'],
+                                   choices=['default_nosc', 'charmm_nosc'],
                                    help='Use this default mdp template files. (Default: default_nosc) ')
     perturbation_opts.add_argument('--complex_mdp', nargs='*', default=None,
                                    help='List of mdp files or file containing the mdp files for complex perturbation')
@@ -2387,11 +2387,13 @@ if __name__ == '__main__':
                                    help='List of mdp files or file containing the mdp files for water perturbation')
     perturbation_opts.add_argument('--mdp_substitution', type=str, default=None,
                                    help='Substitute these values on mdp files')
-    perturbation_opts.add_argument('--perturbations_softcore', default=None, type=str,
-                                   choices=['off', 'maximum', 'average', 'minimum'],
-                                   help='Use soft-core for Van de Waals potential on the ligand. Selects the function '
-                                        'used to calculate the effective soft-core lambda. (Default: no, do not use '
-                                        'soft core)')
+
+    # TODO: fix the softcore code
+    # perturbation_opts.add_argument('--perturbations_softcore', default=None, type=str,
+    #                                choices=['off', 'maximum', 'average', 'minimum'],
+    #                                help='Use soft-core for Van de Waals potential on the ligand. Selects the function '
+    #                                     'used to calculate the effective soft-core lambda. (Default: no, do not use '
+    #                                     'soft core)')
 
     ee_opts = Parser.add_argument_group('enhanced_sampling',
                                         'Options used to control solute tempering/scaling and HREX')
@@ -3006,23 +3008,23 @@ if __name__ == '__main__':
                         else:
                             substitutions.update(arguments.mdp_substitution)
 
-                    if arguments.perturbations_softcore:
-                        fn0 = {'minimum': min,
-                               'maximum': max,
-                               'average': lambda x: sum(x)/len(x)}
-
-                        vdw_values = [this_lambda_table['vdwA'][each_value], this_lambda_table['vdwB'][each_value]]
-
-                        try:
-                            sc_line = '{}       1.0'.format(fn0[arguments.perturbations_softcore](*vdw_values))
-                            substitutions.update({'fep-lambdas': sc_line})
-                        except KeyError:
-                            os_util.local_print('Could not understand function to obtain soft-core lambda "{}". Please '
-                                                'select between {}.'
-                                                ''.format(arguments.perturbations_softcore, list(fn0.keys())),
-                                                msg_verbosity=os_util.verbosity_level.error,
-                                                current_verbosity=arguments.verbose)
-                            raise SystemExit(1)
+                    # if arguments.perturbations_softcore:
+                    #     fn0 = {'minimum': min,
+                    #            'maximum': max,
+                    #            'average': lambda x: sum(x)/len(x)}
+                    #
+                    #     vdw_values = [this_lambda_table['vdwA'][each_value], this_lambda_table['vdwB'][each_value]]
+                    #
+                    #     try:
+                    #         sc_line = '{}       1.0'.format(fn0[arguments.perturbations_softcore](*vdw_values))
+                    #         substitutions.update({'fep-lambdas': sc_line})
+                    #     except KeyError:
+                    #         os_util.local_print('Could not understand function to obtain soft-core lambda "{}". Please '
+                    #                             'select between {}.'
+                    #                             ''.format(arguments.perturbations_softcore, list(fn0.keys())),
+                    #                             msg_verbosity=os_util.verbosity_level.error,
+                    #                             current_verbosity=arguments.verbose)
+                    #         raise SystemExit(1)
 
                     substitutions.update(_TEMPERATURE=arguments.md_temperature)
 

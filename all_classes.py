@@ -281,25 +281,25 @@ class AntSolver:
                 # Test if removed edge is valid (ie: network is still connected and not any path > path_threshold)
                 temp_network = worker_network.copy()
                 temp_network.remove_edge(*selected_edge)
-                if not networkx.is_connected(temp_network.to_undirected(as_view=True)):
-                    # network would be disconnected
-                    n_is_connected += 1
+                if self.min_edges_per_node >= 2 \
+                        and any((v < self.min_edges_per_node for k, v in temp_network.degree)):
+                    # at least one of the network edges has less then min_edges_per_node edges
+                    n_min_edges_per_node += 1
                     pass
                 elif max([j for i in dict(networkx.all_pairs_shortest_path_length(temp_network)).values()
                           for j in i.values()]) > self.path_threshold:
                     # at least one of the network paths would be longer than threshold
                     n_path_long += 1
                     pass
-                elif any((v < self.min_edges_per_node for k, v in temp_network.degree)):
-                    # at least one of the network edges has less then min_edges_per_node edges
-                    n_min_edges_per_node += 1
+                elif not networkx.is_connected(temp_network.to_undirected(as_view=True)):
+                    # network would be disconnected
+                    n_is_connected += 1
                     pass
                 else:
                     worker_network.remove_edge(*selected_edge)
 
                 desirability_list = numpy.delete(desirability_list, edge_list.index(selected_edge))
                 del edge_list[edge_list.index(selected_edge)]
-
                 if len(edge_list) == self.minimum_edges:
                     break
                 if self.extra_edge_beta > 0 \

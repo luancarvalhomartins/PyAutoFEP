@@ -33,6 +33,8 @@ import all_classes
 import multiprocessing
 import savestate_util
 from os.path import splitext
+from statistics import median
+from math import exp
 import mol_util
 import os_util
 import process_user_input
@@ -43,7 +45,7 @@ def fill_thermograph(thermograph, molecules, pairlist=None, use_hs=False, thread
     """
 
     :param networkx.Graph thermograph: map to be edited
-    :param dict molecules: molecules will be read from this dict
+    :param dict molecules: molecules will be read from this dict, format {'molname': rdkit.Chem.Mol}
     :param list pairlist: create edges for these pairs (default: create edges for all possible pairs in molecules)
     :param bool use_hs: consider Hs in the perturbation costs (default: False)
     :param int threads: run this many threads (default = 1)
@@ -63,7 +65,9 @@ def fill_thermograph(thermograph, molecules, pairlist=None, use_hs=False, thread
     if not savestate:
         todo_pairs = pairlist
     else:
-        todo_pairs = [pair for pair in pairlist if frozenset(pair) not in savestate.setdefault('mcs_dict', {})]
+        todo_pairs = [pair for pair in pairlist if frozenset([rdkit.Chem.MolToSmiles(molecules[pair[0]]),
+                                                              rdkit.Chem.MolToSmiles(molecules[pair[1]])])
+                      not in savestate.setdefault('mcs_dict', {})]
 
     for pair in todo_pairs[:]:
         if frozenset(pair) in custom_mcs or '*' in custom_mcs:
@@ -122,8 +126,16 @@ def fill_thermograph(thermograph, molecules, pairlist=None, use_hs=False, thread
             atoms_j = molecules[each_mol_j].GetNumHeavyAtoms()
 
         # The edge cost is the number of perturbed atoms in a hypothetical transformation between the pair.
-        transformed_atoms = (atoms_i - num_core_atoms) + (atoms_j - num_core_atoms)
-        thermograph.add_edge(each_mol_i, each_mol_j, cost=transformed_atoms, desirability=1.0)
+        perturbed_atoms = (atoms_i - num_core_atoms) + (atoms_j - num_core_atoms)
+        thermograph.add_edge(each_mol_i, each_mol_j, perturbed_atoms=perturbed_atoms, desirability=1.0)
+
+    all_pert_atoms = [i for _, _, i in thermograph.edges(data='perturbed_atoms')]
+    # Scale the number of perturbed atoms according to ln(0.2) * median(all_pert_atoms), so that the values are rescaled
+    # to be [0, 1] and the median value will be 0.2
+    # TODO: configurable beta expression
+    beta = -1.6094379 / median(all_pert_atoms)
+    for (edge_i, edge_j) in thermograph.edges:
+        thermograph[edge_i][edge_j]['cost'] = 1 - exp(beta * thermograph[edge_i][edge_j]['perturbed_atoms'])
 
 
 def test_center_molecule(map_bias, all_molecules, verbosity=0):
@@ -616,7 +628,7 @@ if __name__ == '__main__':
                     networkx.drawing.draw(static_egdes, with_labels=True, pos=node_position, edge_color='#A0CBE2',
                                           width=4)
                 networkx.drawing.draw(ant_colony.best_solution.graph, with_labels=True, pos=node_position)
-                labels = networkx.get_edge_attributes(ant_colony.best_solution.graph, 'cost')
+                labels = networkx.get_edge_attributes(ant_colony.best_solution.graph, 'perturbed_atoms')
                 networkx.draw_networkx_edge_labels(ant_colony.best_solution.graph, node_position, edge_labels=labels)
             else:
 
@@ -627,7 +639,7 @@ if __name__ == '__main__':
                 node_position[center_molecule] = [0.0, 0.0]
 
                 networkx.drawing.draw(full_thermograph, with_labels=True, pos=node_position)
-                labels = networkx.get_edge_attributes(full_thermograph, 'cost')
+                labels = networkx.get_edge_attributes(full_thermograph, 'perturbed_atoms')
                 networkx.draw_networkx_edge_labels(full_thermograph, node_position, edge_labels=labels)
 
             matplotlib.pyplot.savefig('best_graph.svg')

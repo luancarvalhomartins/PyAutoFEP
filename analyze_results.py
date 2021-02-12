@@ -33,10 +33,18 @@ from all_classes import Namespace
 from io import StringIO
 
 kB_kJ = 1.3806504 * 6.02214129 / 1000.0  # Boltzmann's constant (kJ/mol/K).
-formated_units = {
+formatted_energy_units = {
     'kJmol': Namespace({'text': 'kJ/mol', 'kB': kB_kJ}),
     'kcal': Namespace({'text': 'kcal/mol', 'kB': kB_kJ / 4.184}),
     'kBT': Namespace({'text': 'k_BT', 'kB': 1})
+}
+
+# The GROMACS unit is ps, time_units.unit.multi * ps will convert to desired the unit
+formatted_time_units = {
+    'us': Namespace({'text': 'µs', 'mult': 1e-6}),
+    'ns': Namespace({'text': 'ns', 'mult': 1e-3}),
+    'ps': Namespace({'text': 'ps', 'mult': 1}),
+    'fs': Namespace({'text': 'fs', 'mult': 1e3})
 }
 
 
@@ -128,9 +136,9 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
         estimators = {'mbar': MBAR}
 
     try:
-        beta = 1 / (formated_units[units].kB * temperature)
+        beta = 1 / (formatted_energy_units[units].kB * temperature)
     except KeyError:
-        os_util.local_print('Energy unit {} unknown. Please use one of {}'.format(units, [k for k in formated_units]),
+        os_util.local_print('Energy unit {} unknown. Please use one of {}'.format(units, [k for k in formatted_energy_units]),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
 
@@ -296,7 +304,7 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
             os_util.local_print(f'Will plot ddg vs. time to {output_file}',
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             plot_ddg_vs_time(numpy.array(forward_ddgs), numpy.array(reverse_ddgs), numpy.array(forward_ddgs_errors),
-                             numpy.array(reverse_ddgs_errors), forward_timestep=time_value_list, units=units,
+                             numpy.array(reverse_ddgs_errors), forward_timestep=time_value_list, energy_units=units,
                              output_file=output_file)
 
     return return_data
@@ -551,7 +559,8 @@ def preprocess_data_table(this_u_nk, detect_equilibration=False, calculate_tau_c
 
 
 def plot_ddg_vs_time(forward_ddgs, reverse_ddgs, forward_ddg_errors, reverse_ddg_errors, forward_timestep,
-                     reverse_timestep=None, units='kJmol', output_file=None, verbosity=0):
+                     reverse_timestep=None, energy_units='kJmol', time_units='ns', colormap='viridis',
+                     output_file='ddg_vs_time.svg', verbosity=0):
     """ Plots the free energy change computed using the equilibrated snapshots between the proper target time frames in
         both forward and reverse directions. This function was ported/adapted from alchemlyb_analysis
         (https://github.com/MobleyLab/alchemical-analysis)
@@ -563,35 +572,45 @@ def plot_ddg_vs_time(forward_ddgs, reverse_ddgs, forward_ddg_errors, reverse_ddg
     :param numpy.array forward_timestep: timesteps used to calculate values in forward_ddG
     :param [NoneType, numpy.array] reverse_timestep: timesteps used to calculate values in reverse_ddG (default:
                                                      forward_timestep in reverse order)
-    :param str units: energy units to be used
-    :param str output_file: save plot to this file, default: svg to pwd
+    :param str energy_units: energy units to be used, one of kJmol, kcal or kBT
+    :param str time_units: time units to use in x axis, one of us, ns, ps, fs
+    :param str colormap: matplotlib color map to be used
+    :param str output_file: save plot to this file, default: save ddg_vs_time.svg to current dir
     :param int verbosity: set verbosity level
     """
 
     if not reverse_timestep:
         reverse_timestep = forward_timestep
-    if not output_file:
-        output_file = 'ddg_vs_time.svg'
+
+    # Get two colors from colormap
+    colormap = cm.get_cmap(colormap)
+    forward_color = colormap(0.8)
+    reverse_color = colormap(0.2)
+
+    # The input time units in ps, lets convert it time_units
+    reverse_timestep = reverse_timestep * formatted_time_units[time_units].mult
+    forward_timestep = forward_timestep * formatted_time_units[time_units].mult
 
     fig, ax = pl.subplots(figsize=(5, 4))
     ax.xaxis.set_ticks_position('bottom')
     ax.yaxis.set_ticks_position('left')
 
-    pl.fill_between(forward_timestep, forward_ddgs[-1] + forward_ddg_errors[-1],
-                    forward_ddgs[-1] - forward_ddg_errors[-1], color='#EEEEEE', zorder=-5)
-
-    line1, _, _ = pl.errorbar(forward_timestep, forward_ddgs, yerr=forward_ddg_errors, color='#000000', ls='-', lw=3,
-                              marker='o', mfc='w', mew=2.5, mec='#000000', ms=12, zorder=2)
-    line2, _, _ = pl.errorbar(reverse_timestep, reverse_ddgs, yerr=reverse_ddg_errors, color='#666666', ls='-', lw=3,
-                              marker='o', mfc='w', mew=2.5, mec='#666666', ms=12, zorder=2)
+    line1, _, _ = pl.errorbar(forward_timestep, forward_ddgs, yerr=forward_ddg_errors, color=forward_color, ls='-',
+                              lw=2, marker='o', mew=2.5, mec=forward_color, ms=6, zorder=2)
+    pl.fill_between(forward_timestep, forward_ddgs + forward_ddg_errors,
+                    forward_ddgs - forward_ddg_errors, color=forward_color, alpha=0.3, zorder=-4)
+    line2, _, _ = pl.errorbar(reverse_timestep, reverse_ddgs, yerr=reverse_ddg_errors, color=reverse_color, ls='-',
+                              lw=2, marker='s', mew=2.5, mec=reverse_color, ms=6, zorder=1)
+    pl.fill_between(forward_timestep, reverse_ddgs + reverse_ddg_errors,
+                    reverse_ddgs - reverse_ddg_errors, color=reverse_color, alpha=0.3, zorder=-5)
 
     ax.set_xlim(forward_timestep[0], forward_timestep[-1])
     pl.yticks(fontsize=10)
-    units = formated_units[units].text
-    ax.set_xlabel('Simulation time (ns)', fontsize=12, color='#000000')
-    ax.set_ylabel('ΔΔG ({})'.format(units), fontsize=12, color='#000000')
+    units = formatted_energy_units[energy_units].text
+    ax.set_xlabel('Simulation time ({})'.format(formatted_time_units[time_units].text), fontsize=12)
+    ax.set_ylabel('ΔΔG ({})'.format(units), fontsize=12)
     ax.set_xticks(forward_timestep)
-    ax.set_xtickslabels(['{:.1f}'.format(i / 1000) for i in forward_timestep])
+    ax.set_xticklabels(['{:.1f}'.format(i) for i in forward_timestep])
     pl.legend((line1, line2), ['Forward', 'Reverse'], loc='best', prop=FontProperties(size=12))
     pl.tight_layout()
     pl.savefig(output_file)
@@ -633,13 +652,13 @@ def plot_ddg_vs_lambda1(ddg_all_pairs, ddg_error_all_pairs, units='kJmol', color
     lines = tuple()
     for i, ((name, values), (_, error)) in enumerate(zip(sorted(ddg_all_pairs.items()),
                                                          sorted(ddg_error_all_pairs.items()))):
-        y = [each_value / formated_units[units].kB for each_value in values]
-        ye = [each_value / formated_units[units].kB for each_value in error]
+        y = [each_value / formatted_energy_units[units].kB for each_value in values]
+        ye = [each_value / formatted_energy_units[units].kB for each_value in error]
         line = pl.bar(x + float(i) / len(ddg_all_pairs), y, color=colors, yerr=ye, lw=0.5,
                       error_kw={'elinewidth': 0.5, 'ecolor': 'black', 'capsize': 0.5})
         lines += (line[0],)
     pl.xlabel('States', fontsize=12, color='#151B54')
-    pl.ylabel(r'$\Delta G$ ' + formated_units[units].text, fontsize=12, color='#151B54')
+    pl.ylabel(r'$\Delta G$ ' + formatted_energy_units[units].text, fontsize=12, color='#151B54')
     pl.xticks(x + 0.5 * width * len(ddg_all_pairs), tuple(['%d-%d' % (i, i + 1) for i in x]), fontsize=8)
     pl.yticks(fontsize=8)
     pl.xlim(x[0], x[-1] + len(lines) * width)
@@ -736,6 +755,7 @@ def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=
     colormap = cm.get_cmap(colormap, n_rep)
     data_matrix = numpy.divide(data_matrix, data_matrix[:, 0].sum())
     ind = numpy.arange(n_rep)
+    # FIXME: if the user uses a uniform colormap, this will fail
     stacked_bars = [ax.bar(ind, data_matrix[0], bar_width, color=colormap.colors[0])]
     for i in numpy.arange(n_rep):
         stacked_bars.append(ax.bar(ind, data_matrix[i], bar_width, bottom=data_matrix[0:i, :].sum(axis=0),
@@ -790,7 +810,7 @@ def analyze_perturbation(perturbation_input, perturbation_data=None, gromacs_log
         output_directory = os.getcwd()
 
     os_util.local_print('Analyzing {}, with {} estimators, and {} as output units'
-                        ''.format(perturbation_input, estimators_data.keys(), formated_units[units].text),
+                        ''.format(perturbation_input, estimators_data.keys(), formatted_energy_units[units].text),
                         msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
     if perturbation_data is None:
@@ -1193,8 +1213,8 @@ if __name__ == '__main__':
                             msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
 
     try:
-        kB = formated_units[arguments.units].kB
-        os_util.local_print('Using units {}'.format(formated_units[arguments.units].text),
+        kB = formatted_energy_units[arguments.units].kB
+        os_util.local_print('Using units {}'.format(formatted_energy_units[arguments.units].text),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
     except KeyError:
         os_util.local_print('Could not understand unit {}. Please select either kJmol, kcal or kBT'
@@ -1522,11 +1542,11 @@ if __name__ == '__main__':
             if this_edge[found_systems[0]]['beta'] == this_edge[found_systems[1]]['beta']:
                 beta = this_edge[found_systems[0]]['beta']
                 value1 = '{:0.1f}\u00B1{:0.1f} {}'.format(system_a['ddg'] / beta, system_a['error'] / beta,
-                                                          formated_units[arguments.units].text)
+                                                          formatted_energy_units[arguments.units].text)
                 value2 = '{:0.1f}\u00B1{:0.1f} {}'.format(system_b['ddg'] / beta, system_b['error'] / beta,
-                                                          formated_units[arguments.units].text)
+                                                          formatted_energy_units[arguments.units].text)
                 value3 = '\u0394\u0394G = {:0.1f} {}'.format((system_a['ddg'] - system_b['ddg']) / beta,
-                                                             formated_units[arguments.units].text)
+                                                             formatted_energy_units[arguments.units].text)
 
                 os_util.local_print('{:^25} {:^20} {:^20} {:^20}'
                                     ''.format(each_perturbation, value1, value2, value3),
@@ -1544,11 +1564,11 @@ if __name__ == '__main__':
 
                 value1 = '{:0.1f}\u00B1{:0.1f} {} @ {:0.2f} K' \
                          ''.format(system_a['ddg'] / beta_a, system_a['error'] / beta_a,
-                                   formated_units[this_edge[found_systems[0]]['units']].text,
+                                   formatted_energy_units[this_edge[found_systems[0]]['units']].text,
                                    this_edge[found_systems[0]]['temperature'])
                 value2 = '{:0.1f}\u00B1{:0.1f} {} @ {:0.2f} K' \
                          ''.format(system_b['ddg'] / beta_b, system_b['error'] / beta_b,
-                                   formated_units[this_edge[found_systems[1]]['units']].text,
+                                   formatted_energy_units[this_edge[found_systems[1]]['units']].text,
                                    this_edge[found_systems[1]]['temperature'])
                 os_util.local_print('{:^25} {:^20} {:^20}'
                                     ''.format(each_perturbation, value1, value2),
