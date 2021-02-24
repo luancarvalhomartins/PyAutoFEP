@@ -2,23 +2,23 @@
 # vim:ft=awk
 
 #
-# https://github.com/plumed/plumed2/blob/master/scripts/partial_tempering.sh
-# This code is licensed under LGPGv3 and is owned by Massimiliano Bonomi, Davide Branduardi, Giovanni Bussi,
-# Carlo Camilloni, Gareth Tribello. See https://github.com/plumed/plumed2 for more info.
-# If you use this script, please cite https://www.tandfonline.com/doi/full/10.1080/00268976.2013.824126
+# This code is based upon https://github.com/plumed/plumed2/blob/master/scripts/partial_tempering.sh and modified to
+# implement REST method as described by Terakawa, Kameda, and Takada in J Comput Chem 32: 1228–1234, 2011.
+# If you use this script, please cite https://www.tandfonline.com/doi/full/10.1080/00268976.2013.824126s and
+# https://onlinelibrary.wiley.com/doi/abs/10.1002/jcc.21703
 #
 
-if [ "$1" = --description ] ; then
+if [ "$1" = --description ]; then
   echo "create a new collective variable from a template"
   exit 0
 fi
 
-if [ "$1" = --options ] ; then
+if [ "$1" = --options ]; then
   echo "--description --gromacs4 --help -h --options"
   exit 0
 fi
 
-if [ "$1" = --help ] || [ "$1" = -h ] ; then
+if [ "$1" = --help ] || [ "$1" = -h ]; then
   cat <<EOF
 Usage:
 
@@ -69,13 +69,19 @@ EOF
   exit
 fi
 gromacs5=1
-if [ "$1" == --gromacs4 ] ; then
+if [ "$1" == --gromacs4 ]; then
   gromacs5=0
   shift
 fi
 awk -v scale=$1 -v gromacs5=$gromacs5 '
 BEGIN{
   combrule=1;
+}
+function sgn(x) {
+     return x < 0 ? -1 : x > 0
+}
+function abs(x) {
+     return x < 0 ? -x : x
 }
 function recname()
 {
@@ -124,6 +130,25 @@ function find_matching_torsion(params,atype, a1,a2,a3,a4,iswitch,progression,tes
    }
    return param;
 }
+function find_matching_bond(params, a1, a2) {
+  if (a1"-"a2 in params) {
+    return params[a1"-"a2]
+  } else if (a2"-"a1 in params) {
+    return params[a2"-"a1]
+  } else {
+    error("Bondtype between atoms "a1" and "a2" not found")
+  }
+}
+function find_matching_angle(params, a1, a2, a3) {
+  if (a1"-"a2"-"a3 in params) {
+    return params[a1"-"a2"-"a3]
+  } else if (a3"-"a2"-"a1 in params) {
+    return params[a3"-"a2"-"a1]
+  } else {
+    error("Angletype between atoms "a1", "a2", and "a3" not found")
+  }
+}
+
 {
 # This is the suffix for "hot" atoms:
   suffix="_";
@@ -143,7 +168,10 @@ function find_matching_torsion(params,atype, a1,a2,a3,a4,iswitch,progression,tes
 # set name of current block
   if(recname() ) rec=recname();
 # set defaults for nb interactions
-  if(rec=="defaults" && NF==5) combrule=$2;
+  if(rec=="defaults" && NF==5) {
+    combrule=$2;
+    if(combrule==1) error("This script currently only works for combination rules 2 and 3");
+  }
 # if we are in atomtypes section, check which fields are present
 # use same heuristics as in src/kernel/toppush.c
   if(rec=="atomtypes" && NF>=4){
@@ -183,6 +211,32 @@ function find_matching_torsion(params,atype, a1,a2,a3,a4,iswitch,progression,tes
     print "; LINE("NR")",$0,comments
     next;
   }
+# storing bondtypes:
+  if(rec=="bondtypes" && ($3==1 || $3==2 || $3==3 || $3==4 || $3==6 || $3==7)) {
+    functype = $3
+    if (functype == 3 || functype == 4) {
+      string=$3" "$4" "$5" "$6;
+    } else if (functype == 1 || functype == 2 || functype == 6 || functype == 7) {
+      string=$3" "$4" "$5;
+    }
+    indexes = $1"-"$2
+    params[indexes] = string;
+# parameters are commented since they are used inline
+    print "; LINE("NR")",$0,comments
+    next;
+  }
+# storing angletypes:
+  if(rec=="angletypes" && ($4 == 1 || $4 == 2 || $4 == 3 || $4 == 4 || $4 == 5 || $4 == 6)) {
+    string=$4;
+    for (i = 5; i <= NF; i++) {
+      string = string" "$i
+    }
+    indexes = $1"-"$2"-"$3
+    params[indexes] = string;
+# parameters are commented since they are used inline
+    print "; LINE("NR")",$0,comments
+    next;
+  }
 ##### SCANNING #####
 # in case new list of atoms for a new molecule, delete the present list
   if(recname()=="atoms"){
@@ -206,7 +260,7 @@ function find_matching_torsion(params,atype, a1,a2,a3,a4,iswitch,progression,tes
     sscale=1.0;
     if(found1)sscale*=sqrt(scale);
     if(found4)sscale*=sqrt(scale);
-# this is the case in which dihedrals are online:
+# This is the case in which dihedrals are online:
      if(NF>5){
        printf($1" "$2" "$3" "$4" "$5" ");
        if($5==1 || $5==4 || $5==9){
@@ -264,31 +318,108 @@ function find_matching_torsion(params,atype, a1,a2,a3,a4,iswitch,progression,tes
    } else error("dihedrals should have at least 5 fields");
 # ATOMTYPES
   } else if(rec=="atomtypes" && NF>=4){
-    scale2=1.0; # scaling for second to last column
-    if(combrule==1) scale2=scale;
-    for(i=1;i<NF;i++)printf($i" "); print $NF,comments;
+    for(i=1;i<NF;i++) printf($i" "); print $NF,comments;
     printf($1""suffix" "bondtype[$1]" ");
     from=3;
     if(NF==6) from=2; # GROMOS does not store bondtype by default, so we should add one column
-    for(i=from;i<NF-1;i++)printf($i" "); print scale2*$(NF-1),scale*$NF," ; scaled";
+    for(i=from;i<NF-1;i++) printf($i" "); print $(NF-1), scale*$NF," ; scaled";
 # ATOMTYPES (PAIRS)
   } else if((rec=="pairtypes" || rec=="nonbond_params") && NF>=5){
-    scale2=1.0; # scaling for second to last column
-    if(combrule==1) scale2=scale;
     print $1,$2,$3,$4,$5,comments
-    print $1""suffix,$2,$3,sqrt(scale2)*$4,sqrt(scale)*$5," ; scaled";
-    print $1,$2""suffix,$3,sqrt(scale2)*$4,sqrt(scale)*$5," ; scaled";
-    print $1""suffix,$2""suffix,$3,scale2*$4,scale*$5," ; scaled";
+    print $1""suffix,$2,$3,$4,sqrt(scale)*$5," ; scaled";
+    print $1,$2""suffix,$3,$4,sqrt(scale)*$5," ; scaled";
+    print $1""suffix,$2""suffix,$3,$4,scale*$5," ; scaled";
 # ATOMS
   } else if(rec=="atoms" && NF>=7){
      if($2~".*"suffix"$"){
-       if(NF>=8) print $1,$2,$3,$4,$5,$6,$7*sqrt(scale),$8,comments;
-       if(NF==7) print $1,$2,$3,$4,$5,$6,$7*sqrt(scale),comments;
+       if(NF>=8) print $1,$2,$3,$4,$5,$6,sgn($7)*sqrt(abs($7)*scale),$8,comments;
+       if(NF==7) print $1,$2,$3,$4,$5,$6,sgn($7)*sqrt(abs($7)*scale),comments;
        list_of_atoms[n_of_atoms]=$1;
        n_of_atoms++;
      }
      else print $0
+# BONDS
+  } else if (rec=="bonds" && ($3==1 || $3==2 || $3==3 || $3==4 || $3==6 || $5==7) ) {
+    found1 = 0; found2 = 0;
+    for(j = 0; j < n_of_atoms; j++) {
+      if($1==list_of_atoms[j]) found1 = 1;
+      if($2==list_of_atoms[j]) found2 = 1;
+    }
+    (found1 == 1 || found2 == 1) ? this_scale=scale : this_scale=1.0;
+    if ( NF > 3 ) {
+      # The bond data is online, scale accordingly
+      for (i = 1; i <= NF; i++) {
+        if (i <= 4) {
+          printf($i" ");
+        } else {
+         printf(this_scale*$i" ");
+        }
+      }
+      print comments
+    } else if (NF == 2 || NF == 3) {
+      # Search the bondtypes array
+      atype[1] = bondtype[ato[$1]];
+      atype[2] = bondtype[ato[$2]];
+      param = find_matching_bond(params, atype[1], atype[2]);
+      n = split(param,array1," ");
+      printf($1" "$2" "array1[1]" ");
+      for (i = 2; i <= n; i++) {
+        printf(this_scale*array1[i]" ");
+      }
+      print comments;
+    } else {
+      error("Bond lines should have at least 2 fields")
+    }
+# ANGLES
+  } else if (rec=="angles" && ($4 == 1 || $4 == 2 || $4 == 3 || $4 == 4 || $4 == 5 || $4 == 6) ) {
+    found1 = 0; found2 = 0; found3 = 0;
+    for(j = 0; j < n_of_atoms; j++) {
+      if($1 == list_of_atoms[j]) found1 = 1;
+      if($2 == list_of_atoms[j]) found2 = 1;
+      if($3 == list_of_atoms[j]) found3 = 1;
+    }
+    (found1 == 1 || found2 == 1 || found3 == 1) ? this_scale=scale : this_scale=1.0;
+    if ( NF > 4 ) {
+      # The bond data is online, scale accordingly
+      for (i = 1; i <= NF; i++) {
+        if (i <= 4) {
+          printf($i" ");
+        } else {
+         printf(this_scale*$i" ");
+        }
+      }
+      print comments
+    } else if (NF == 3 || NF == 4) {
+      # Search the bondtypes array
+      atype[1] = bondtype[ato[$1]];
+      atype[2] = bondtype[ato[$2]];
+      atype[3] = bondtype[ato[$3]];
+      param = find_matching_angle(params, atype[1], atype[2], atype[3]);
+      n = split(param,array1," ");
+      functype = array1[1];
+      printf($1" "$2" "$3" "functype" ");
+      if (functype == 1 || functype == 2) {
+        # Angle and G96 angle
+        printf(array1[2]" "array1[3]*this_scale);
+      } else if (functype == 3) {
+        # Cross bond-bond
+        printf(array1[2]" "array1[3]" "array1[4]*this_scale);
+      } else if (functype == 4) {
+        # Cross bond-angle
+        printf(array1[2]" "array1[3]" "array1[4]" "array1[5]*this_scale);
+      } else if (functype == 5) {
+        # Urey-Bradley
+        printf(array1[2]" "array1[3]*this_scale" "array1[4]" "array1[5]*this_scale);
+      } else if (functype == 6) {
+        # Quartic angle
+        printf(array1[2]" "array1[3]*this_scale" "array1[4]*this_scale" "array1[5]*this_scale" "array1[6]*this_scale" "array1[7]*this_scale);
+      }
+      print comments;
+    } else {
+      error("Angle lines should have at least 3 fields")
+    }
 # EVERYTHING ELSE (just print)
   } else print $0,comments
 }
+END { for (key in params) { print key ": " params[key] } }
 '
