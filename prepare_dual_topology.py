@@ -1732,23 +1732,23 @@ def edit_mdp_prepare_rerun(mdp_input, mdp_outfile, verbosity=0):
         file_handler.writelines(edited_mdp)
 
 
-def do_solute_scaling(solute_scaling_file, scale_value, scaled_atoms, rest2_bin=None, verbosity=0):
+def do_solute_scaling(solute_scaling_file, scale_value, scaled_atoms, scaling_bin=None, verbosity=0):
     """ Uses plumed to apply solute scaling
 
     :param str solute_scaling_file: apply solute scaling to this file (note: will edit in place)
     :param float scale_value: scale the dihedral by this amount
     :param dict scaled_atoms: a dict containing information on atoms to be scaled
-    :param str rest2_bin: use this rest2 binary
+    :param str scaling_bin: use this rest2 binary
     :param int verbosity: control verbosity level
     :rtype: bool
     """
     os_util.local_print('Entering do_solute_scaling: solute_scaling_file={}, scale_value={}, scaled_atoms={}, '
-                        'rest2_bin={}, verbosity={}'
-                        ''.format(solute_scaling_file, scale_value, scaled_atoms, rest2_bin, verbosity),
+                        'scaling_bin={}, verbosity={}'
+                        ''.format(solute_scaling_file, scale_value, scaled_atoms, scaling_bin, verbosity),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    if not rest2_bin:
-        rest2_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest2.sh')
+    if not scaling_bin:
+        scaling_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest2.sh')
 
     input_data = os_util.read_file_to_buffer(solute_scaling_file, return_as_list=True, die_on_error=True,
                                              error_message='Could not read solute scaling file.', verbosity=verbosity)
@@ -1819,13 +1819,13 @@ def do_solute_scaling(solute_scaling_file, scale_value, scaled_atoms, rest2_bin=
     if verbosity >= os_util.verbosity_level.debug:
         altered_topology_file = '{}_altered_topology_backup{}'.format(*os.path.splitext(solute_scaling_file))
         os_util.local_print('Saving a copy of edited topology submitted to REST bin {} in file {}'
-                            ''.format(rest2_bin, altered_topology_file),
+                            ''.format(scaling_bin, altered_topology_file),
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
         with open(altered_topology_file, 'w') as fh:
             fh.write(altered_topology)
 
     # Now call plumed and supply it the edited file
-    process_handler = subprocess.Popen([rest2_bin, str(scale_value)],
+    process_handler = subprocess.Popen([scaling_bin, str(scale_value)],
                                        stderr=subprocess.PIPE, stdout=subprocess.PIPE, stdin=subprocess.PIPE,
                                        bufsize=-1, universal_newlines=True)
     scaled_output, error_log = process_handler.communicate(altered_topology)
@@ -1916,7 +1916,7 @@ def process_scaling_input(input_data, verbosity=0):
 
 
 def prepare_steps(lambda_value, lambda_dir, dir_list, topology_file, structure_file, index_file='index.ndx',
-                  solute_scaling_list=None, solute_scaling_atoms_dict=None, rest2_bin=None, plumed_conf=None,
+                  solute_scaling_list=None, solute_scaling_atoms_dict=None, scaling_bin=None, plumed_conf=None,
                   local_gmx_path='gmx', gmx_path='gmx', gmx_maxwarn=1, verbosity=0):
     """ Run Gromacs to minimize and equilibrate a system, if required, apply solute scaling
 
@@ -1928,7 +1928,7 @@ def prepare_steps(lambda_value, lambda_dir, dir_list, topology_file, structure_f
     :param str index_file: Gromacs-compatible index file (.ndx)
     :param [list, numpy.array] solute_scaling_list: a list of scaling values along the lambda windows
     :param dict solute_scaling_atoms_dict: selection of atoms to be scaled
-    :param str rest2_bin: use this executable to apply solute scaling
+    :param str scaling_bin: use this executable to apply solute scaling
     :param str: use data this as plumed configuration file
     :param str local_gmx_path: path to Gromacs binary in the current machine (default: gmx)
     :param str gmx_path: path to Gromacs binary (default: gmx)
@@ -1985,7 +1985,7 @@ def prepare_steps(lambda_value, lambda_dir, dir_list, topology_file, structure_f
         os.remove(temporary_tpr)
         # Edit atoms in solute_scaling_dict, call plumed and save to file_names['top']
         do_solute_scaling(file_names['top'], solute_scaling_list[lambda_value], solute_scaling_atoms_dict,
-                          rest2_bin=rest2_bin, verbosity=verbosity)
+                          scaling_bin=scaling_bin, verbosity=verbosity)
 
     output_data = []
     last_files_names = None
@@ -2454,7 +2454,7 @@ if __name__ == '__main__':
     process_user_input.add_argparse_global_args(Parser)
     arguments = process_user_input.read_options(Parser, unpack_section='prepare_dual_topology')
 
-    os_util.local_print('These are the input options: {}'.format(arguments.__dict__),
+    os_util.local_print('These are the input options: {}'.format(arguments),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=arguments.verbose)
 
     # Suppress lengthy openbabel warnings, unless user wants to
@@ -2506,18 +2506,18 @@ if __name__ == '__main__':
         arguments[each_arg] = os_util.detect_type(arguments[each_arg], test_for_list=True, verbosity=arguments.verbose)
         arguments[each_arg] = [arguments[each_arg]] if isinstance(arguments[each_arg], str) else arguments[each_arg]
 
-    if bool(arguments.pre_solvated) ^ bool(arguments.topology):
+    if arguments.pre_solvated and not arguments.topology:
         if arguments.no_checks:
+            os_util.local_print('You provided a pre-solvated structure, but did not provided a topology. Because '
+                                'you are running with no_checks, I will go on. You will need to edit the topology '
+                                'manually. Alternatively, use the topology input option',
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
+        else:
             os_util.local_print('You provided a pre-solvated structure, but did not provided a topology. Please, '
                                 'use the topology input option. Alternatively, you can run with no_checks to '
                                 'bypass this checking.',
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
             raise SystemExit(1)
-        else:
-            os_util.local_print('You provided a pre-solvated structure, but did not provided a topology. Because '
-                                'you are running with no_checks, I will go on. You will need to edit the topology '
-                                'manually. Alternatively, use the topology input option',
-                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
 
     arguments.mdp_substitution = os_util.detect_type(arguments.mdp_substitution, test_for_dict=True)
     if arguments.mdp_substitution:
@@ -2639,16 +2639,23 @@ if __name__ == '__main__':
             solute_scaling_list = generate_scaling_vector(1.0, arguments.solute_scaling, len(lambda_dict['coulA']))
             solute_scaling_atoms_dict = process_scaling_input(arguments.solute_scaling_selection)
             if arguments.solute_scaling_bin == 'rest2':
-                rest2_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest2.sh')
-            elif arguments.solute_scaling_bin == 'rest':
-                rest2_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest1.sh')
+                scaling_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest2.sh')
+            elif arguments.solute_scaling_bin == 'rest1':
+                scaling_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest1.sh')
             else:
-                rest2_bin = arguments.solute_scaling_bin
+                scaling_bin = arguments.solute_scaling_bin
+
+            try:
+                os.chmod(scaling_bin, os.stat(scaling_bin).st_mode | 0o111)
+            except OSError:
+                os_util.local_print('Fail to make {} an executable. Applying solute scaling may fail.'
+                                    ''.format(scaling_bin),
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
 
             os_util.local_print('This is the solute scaling data:\n\tsolute_scaling_list={}\n\t'
-                                'solute_scaling_atoms_dict={}\n\trest2_bin={}'
-                                ''.format(solute_scaling_list, solute_scaling_atoms_dict, rest2_bin),
-                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
+                                'solute_scaling_atoms_dict={}\n\tscaling_bin={}'
+                                ''.format(solute_scaling_list, solute_scaling_atoms_dict, scaling_bin),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=arguments.verbose)
 
     if arguments.pre_solvated:
         if index_data is False:
@@ -3085,7 +3092,7 @@ if __name__ == '__main__':
                     equilibration_output.append(prepare_steps(each_value, this_basedir, dir_mdp_list,
                                                               topology_file=topology_file,
                                                               structure_file=structure_file,
-                                                              index_file=arguments.index, rest2_bin=rest2_bin,
+                                                              index_file=arguments.index, scaling_bin=scaling_bin,
                                                               solute_scaling_list=this_solute_scaling_list,
                                                               solute_scaling_atoms_dict=solute_scaling_atoms_dict,
                                                               plumed_conf=plumed_conf,
