@@ -421,5 +421,5 @@ function find_matching_angle(params, a1, a2, a3) {
 # EVERYTHING ELSE (just print)
   } else print $0,comments
 }
-END { for (key in params) { print key ": " params[key] } }
+
 '
