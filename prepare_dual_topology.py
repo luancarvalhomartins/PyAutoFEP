@@ -2734,7 +2734,7 @@ if __name__ == '__main__':
         perturbation_graph = progress_data.get('perturbation_map', None)
         if not perturbation_graph:
             try:
-                perturbation_graph = progress_data['thermograph']['best_solution']
+                perturbation_graph = progress_data['thermograph']['last_solution']
             except KeyError as error:
                 if error.args[0] == 'thermograph':
                     os_util.local_print('Perturbation map data {} corrupt. Please, run generat_perturbation_map '
@@ -2749,6 +2749,7 @@ if __name__ == '__main__':
                                         current_verbosity=arguments.verbose)
                     raise SystemExit(1)
             else:
+                perturbation_graph = perturbation_graph['best_solution']
                 perturbation_map = {(node_i, node_j): edge_data
                                     for node_i, node_j, edge_data in perturbation_graph.edges.data()}
 

@@ -601,7 +601,8 @@ if __name__ == '__main__':
         raise SystemExit(1)
 
     # Save the current solution data
-    progress_data['thermograph']['best_solution'] = archive
+    progress_data['thermograph']['last_solution'] = archive
+    progress_data.save_data()
 
     if arguments.plot:
         import matplotlib

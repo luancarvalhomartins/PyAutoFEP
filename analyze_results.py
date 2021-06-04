@@ -303,9 +303,14 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
         else:
             os_util.local_print(f'Will plot ddg vs. time to {output_file}',
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-            plot_ddg_vs_time(numpy.array(forward_ddgs), numpy.array(reverse_ddgs), numpy.array(forward_ddgs_errors),
-                             numpy.array(reverse_ddgs_errors), forward_timestep=time_value_list, energy_units=units,
-                             output_file=output_file)
+            plot_ddg_vs_time(forward_ddgs=numpy.array(forward_ddgs),
+                             reverse_ddgs=numpy.array(reverse_ddgs),
+                             forward_ddg_errors=numpy.array(forward_ddgs_errors),
+                             reverse_ddg_errors=numpy.array(reverse_ddgs_errors),
+                             forward_timestep=time_value_list,
+                             energy_units=units,
+                             output_file=output_file,
+                             verbosity=verbosity)
 
     return return_data
 
@@ -588,8 +593,10 @@ def plot_ddg_vs_time(forward_ddgs, reverse_ddgs, forward_ddg_errors, reverse_ddg
     reverse_color = colormap(0.2)
 
     # The input time units in ps, lets convert it time_units
-    reverse_timestep = reverse_timestep * formatted_time_units[time_units].mult
-    forward_timestep = forward_timestep * formatted_time_units[time_units].mult
+    if not isinstance(forward_timestep, list):
+        forward_timestep = forward_timestep * formatted_time_units[time_units].mult
+    if not isinstance(reverse_timestep, list):
+        reverse_timestep = reverse_timestep * formatted_time_units[time_units].mult
 
     fig, ax = pl.subplots(figsize=(5, 4))
     ax.xaxis.set_ticks_position('bottom')
@@ -789,7 +796,8 @@ def analyze_perturbation(perturbation_input, perturbation_data=None, gromacs_log
     :param dict estimators_data: estimators to be used as {estimator_name: callable}, default: {'mbar':
                                  alchemlyb.estimators.mbar}
     :param list analysis_types: run these analysis, default: run all
-    :param float convergence_analysis_step: use this step size to convergence analysis and, optionally, plots
+    :param float convergence_analysis_step: use this step size to run convergence analysis and generate plots, if
+                                            plot=True
     :param int start_time: start analysis from this time
     :param bool calculate_tau_c: print subsampling info about series
     :param bool detect_equilibration: automatically detect (and ignore) non-equilibrium region
@@ -1122,18 +1130,12 @@ def ddg_to_center_ddg(ddg_graph, center, method='shortest', ddg_key='final_ddg',
 
 def dummy_hysteresis(g0):
     return_data = {}
-    for path in networkx.algorithms.cycles.simple_cycles(g0.to_undirected().to_directed()):
+    for path in networkx.cycle_basis(g0.to_undirected()):
         if len(path) < 3:
             continue
 
         this_cycle_dg = sum_path(g0, path)
-
-        try:
-            this_cycle_dg -= float(g0.edges[(path[0], path[-1])]['ddg'])
-        except KeyError:
-            this_cycle_dg += float(g0.edges[(path[-1], path[0])]['ddg'])
-
-        return_data[path] = this_cycle_dg
+        return_data[tuple(path)] = this_cycle_dg
 
     return return_data
 
@@ -1156,7 +1158,7 @@ if __name__ == '__main__':
                         help='First frame (ps) to read from trajectory, in ps. Default: 0 ps')
     Parser.add_argument('--last_frame', type=int, default=None,
                         help='Last frame (ps) to read from trajectory, in ps. Default: -1 = read all')
-    Parser.add_argument('--convergence', default=None, type=int,
+    Parser.add_argument('--convergence', default=None, type=str,
                         help='Calculates the \u0394\u0394G estimate and error for successive truncated trajectories '
                              'using this step (ps). (Default: autodetect)')
     Parser.add_argument('--calculate_tau_c', default=None, type=str,
@@ -1299,6 +1301,7 @@ if __name__ == '__main__':
                                 'this may fail.'
                                 ''.format(arguments.input), msg_verbosity=os_util.verbosity_level.error,
                                 current_verbosity=arguments.verbose)
+            saved_data['perturbation_map'] = networkx.DiGraph()
             saved_data['no_progress'] = True
         else:
             os_util.local_print('Could not find a progress file from your data {}, so I cannot read a map. You can '
@@ -1370,9 +1373,8 @@ if __name__ == '__main__':
                                 current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.error)
             saved_data['perturbation_map'] = networkx.DiGraph()
         else:
-            os_util.local_print('Failed to load a progress file from {}. Because you are using no_checks, Cannot go '
-                                'on. You can run with no_checks to try force the reconstruction of the map from the '
-                                'perturbation data.'
+            os_util.local_print('Failed to load a progress file from {}. Cannot go on. You can run with no_checks to '
+                                'try forcing the reconstruction of the map from the perturbation data.'
                                 ''.format(arguments.input),
                                 current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.error)
             raise SystemExit(-1)
