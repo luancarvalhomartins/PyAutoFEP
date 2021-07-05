@@ -14,8 +14,8 @@ provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in 
 - [rdkit](https://www.rdkit.org/) 2019.03+
 - [networkx](https://networkx.org) 2.3
 - [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3 & [pymbar](https://github.com/choderalab/pymbar) 3.0.4
-- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*)
-- matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation map*)
+- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*. openbabel 3.X is not currently not supported.)
+- matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation_map.py*)
 - numpy (required only in *analyze_results.py*)
 
 Optional requirements. The following are not required to run basic calculations in PyAutoFEP, but are needed for specific functions.
@@ -40,7 +40,7 @@ conda activate PyAutoFEP
 
 # Install stuff
 conda install -c rdkit rdkit
-conda install -c openbabel openbabel
+conda install -c openbabel openbabel # ver 3.X is not supported, make sure to install 2.4.X ver
 conda install matplotlib networkx pip
 
 # Use pip to install pymbar and alchemlyb
@@ -51,6 +51,14 @@ pip install pymbar alchemlyb
 [PyAutoFEP manual](https://github.com/luancarvalhomartins/PyAutoFEP/blob/master/docs/Manual.pdf) describes in detail its functions and options.
 
 A tutorial using the Farnesoid X receptor and a series of rigid binders is available. We plan to add more tutorials, covering specific aspects of PyAutoFEP using in the near future.
+
+## Issues & pull requests
+Issues and pull requests are welcome. But, please, fill/request it against https://github.com/lmmpf/PyAutoFEP.
+
+## Citation
+If PyAutoFEP is used in scientific publications, please cite:
+
+* LC Martins, EA Cino, RS Ferreira. PyAutoFEP: An Automated Free Energy Perturbation Workflow for GROMACS Integrating Enhanced Sampling Methods. **Journal of Chemical Theory and Computation**. _In press_. 2021. [LINK](https://pubs.acs.org/doi/10.1021/acs.jctc.1c00194)
 
 ## Legal notice
 Copyright © 2021  Luan Carvalho Martins <luancarvalhomartins@gmail.com>
