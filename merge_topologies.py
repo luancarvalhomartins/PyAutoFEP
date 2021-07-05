@@ -483,13 +483,6 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
     :rtype: MergedTopologies
     """
 
-    os_util.local_print('Entering merge_topologies(molecule_a={}, file_mol2={}, file_topology1={}, file_topology2={},'
-                        ' no_checks={}, save_state={}, mcs={}, verbosity={})'
-                        ''.format(molecule_a.GetProp('_Name'), molecule_b.GetProp('_Name'), file_topology1,
-                                  file_topology2, no_checks, savestate, mcs, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug,
-                        current_verbosity=verbosity)
-
     molecule1 = mol_util.process_dummy_atoms(molecule_a, verbosity=verbosity)
     molecule2 = mol_util.process_dummy_atoms(molecule_b, verbosity=verbosity)
 

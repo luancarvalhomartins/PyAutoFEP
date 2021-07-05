@@ -774,6 +774,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
     input_ligands = os_util.detect_type(input_ligands, test_for_dict=True, test_for_list=True, verbosity=verbosity)
 
     ligand_dict = parse_input_molecules(input_ligands, verbosity=verbosity)
+    old_ligand_dict = ligand_dict.copy()
 
     # Reprocess the dict to convert lists in inner dicts
     for each_name, each_molecule in ligand_dict.items():
@@ -803,18 +804,27 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                     if not no_checks:
                         os_util.local_print('PDB format is not supported. In order to avoid bond-order '
                                             'related problems, please, use a mol2 file. Alternatively, rerun with '
-                                            'no_checks to force read of a PDB.',
+                                            'no_checks to force reading of a PDB.',
                                             msg_verbosity=os_util.verbosity_level.error,
                                             current_verbosity=verbosity)
                     else:
-                        os_util.local_print('PDB format is not supported. In order to avoid bond-order '
-                                            'related problems, please, use a mol2 file. Because you used '
-                                            'no_checks, I will try to use it anyway.',
+                        os_util.local_print('You are using a PDB file for a ligand ({}). This is is likely a bad idea. '
+                                            'Because you used no_checks, I will try to use it anyway. Be aware that '
+                                            'bond orders, aromaticity, atoms types, charges and pretty much anything '
+                                            'else may be incorrectly detected.'
+                                            ''.format(each_field),
                                             msg_verbosity=os_util.verbosity_level.error,
                                             current_verbosity=verbosity)
                         new_dict['molecule'] = rdkit.Chem.MolFromPDBFile(each_field, removeHs=False)
+                elif this_ext in ['.itp', '.atp', '.top', '.str']:
+                    new_dict.setdefault('topology', []).append(each_field)
+                elif os.path.isdir(each_field):
+                    new_dict.setdefault('topology', []).append(each_field)
                 else:
-                    # Must be a topology file
+                    # Unknown extension, but I will assume it's a topology file anyway
+                    os_util.local_print('Unknown file extension for {}, assuming it is a GROMACS-compatible topology '
+                                        'file.'.format(each_field),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                     new_dict.setdefault('topology', []).append(each_field)
             ligand_dict[each_name] = new_dict
         else:
@@ -830,7 +840,8 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
         ligand_dict = savestate_util['ligands_data']
         savestate_util.save_data()
 
-    # Check sanity of the data
+    # Check the data, convert if needed
+    # TODO: do the .str->GROMACS conversion without a subprocess
     for each_name, each_data in ligand_dict.items():
         if 'molecule' not in each_data:
             os_util.local_print('Could not find molecule data for ligand {}. Please check your input file or '
@@ -847,17 +858,56 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
         elif len(each_data['topology']) == 2:
-            files_set = {os.path.splitext(each_data['topology'][0]), os.path.splitext(each_data['topology'][1])}
+            files_set = {os.path.splitext(each_data['topology'][0])[1], os.path.splitext(each_data['topology'][1])[1]}
             if files_set == {'.str', '.ff'}:
-                os_util.local_print('Based on your input topology for molecule {}, I detected you are using CGenFF '
-                                    'topology in str format and supplied a forcefield ({}). Starting automatic '
-                                    'conversion. If you need finer control over topology conversion, please do it '
-                                    'before calling {}'
-                                    ''.format(str(each_data['molecule']), each_data['topology'],
-                                              'prepare_dual_topology.py'))
-                # HERE - automatic conversion from Charmm str, reading the directory name and running
-                #  cgenff_charmm2gmx.py
-                pass
+                force_field_dir = [filename for filename in each_data['topology']
+                                   if os.path.splitext(filename)[1] == '.ff'][0]
+                # Try to find a .mol2 file in the input
+                mol2_file = [filename for filename in old_ligand_dict[each_name]
+                             if os.path.splitext(filename)[1] == '.mol2']
+                str_file = [filename for filename in each_data['topology']
+                            if os.path.splitext(filename)[1] == '.str'][0]
+                if len(mol2_file) == 1:
+                    mol2_file = mol2_file[0]
+                    os_util.local_print('Based on your input topology for molecule {}, I detected you are using CGenFF '
+                                        'topology in str format and supplied a forcefield ({}). Starting automatic '
+                                        'conversion using {}. If you need finer control over topology conversion, '
+                                        'please do it before calling {}'
+                                        ''.format(each_name, force_field_dir, mol2_file, os.path.basename(__file__)),
+                                        msg_verbosity=os_util.verbosity_level.warning,
+                                        current_verbosity=verbosity)
+                else:
+                    if no_checks:
+                        mol2_file = os.path.join(os.path.dirname(str_file),
+                                                 os.path.splitext(str_file)[1] + os.extsep + 'mol2')
+                        os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
+                                            'correspondingly .mol2 file was found. Because you are running with '
+                                            'no_checks, I will try to generate a {} file from the inputs. Be aware '
+                                            'that this may fail.'.format(str_file, mol2_file),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        mol_util.obmol_to_rwmol(each_data['molecule']).write('mol2', mol2_file)
+                    else:
+                        os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
+                                            'correspondingly .mol2 file was found. A .mol2 file is required to convert '
+                                            'a CGenFF topology to a GROMACS-compatible one. You can rerun with '
+                                            'no_checks so I will try to generate a .mol2 file from the inputs, but '
+                                            'this is not ideal.'.format(str_file),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        raise SystemExit(1)
+                output_files = str_to_gmx(str_file=str_file, mol2_file=mol2_file, mol_name=each_name,
+                                          force_field_dir=force_field_dir, output_dir=os.path.dirname(str_file),
+                                          no_checks=no_checks, verbosity=verbosity)
+                ligand_dict[each_name]['topology'] = list(output_files.values())
+        elif len(each_data['topology']) == 1 and os.path.splitext(each_data['topology'][0])[1] == '.str':
+            os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
+                                'force field directory was found. A .ff directory is required to convert '
+                                'a CGenFF topology to a GROMACS-compatible one. Please, add a CHARMM force field '
+                                'directory (eg, charmm36-xxx0000.ff) to your input_ligands for molecule {}.'
+                                ''.format(each_name, each_data['topology'][0]),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
 
     ligand_table = '{:=^50}\n{:^10}{:^20}{:^20}\n'.format(' Input ligands ', ' Name ', 'Molecule', 'Topology')
     table_rows = []
@@ -866,7 +916,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
         lig_mol = lig_data['molecule'] if isinstance(lig_data['molecule'], str) \
             else rdkit.Chem.MolToSmiles(lig_data['molecule'])
         table_rows.append('{:^10} {:^19} {:^19}'.format(this_ligand, lig_mol, ', '.join(lig_data['topology'])
-                                                        if len(lig_data['topology']) > 1 else lig_data['topology'][0]))
+        if len(lig_data['topology']) > 1 else lig_data['topology'][0]))
     ligand_table += '\n'.join(table_rows)
     ligand_table += '\n' + '=' * 50
     os_util.local_print(ligand_table,
@@ -1153,8 +1203,6 @@ def edit_itp(itp_filename):
         except IOError:
             os_util.local_print('Could write to {}'.format(itp_filename), msg_verbosity=os_util.verbosity_level.error)
             raise SystemExit(1)
-        else:
-            return True
 
 
 def make_index(new_index_file, structure_data, index_data=None, method='internal', gmx_bin='gmx',
@@ -1168,7 +1216,7 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
     :param str gmx_bin: gromacs binary (only used if method == internal; default: gmx)
     :param str logfile: save log to this file. None: do not save
     :param str ligand_name: use this as ligand name
-    :param int verbosity: be verbosity
+    :param int verbosity: verbosity level
     """
 
     os_util.local_print('Entering make_index: new_index_file={}, structure_data={}, index_data={}, method={}, '
@@ -1238,7 +1286,7 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
                                              return_output=True)
         else:
             stdout, stderr = os_util.run_gmx(gmx_bin, index_cmd, input_data='q\n', verbosity=verbosity,
-                                             alt_environment={'GMX_MAXBACKUP': '-1'})
+                                             return_output=True, alt_environment={'GMX_MAXBACKUP': '-1'})
 
         if logfile:
             with open(logfile, 'w') as fh:
@@ -1265,6 +1313,85 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
                         ''.format(new_index_file, structure_data,
                                   '\n'.join(['{}: {} atoms'.format(k, len(v)) for k, v in ndx_groups.items()])),
                         msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+
+def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output_dir=None, no_checks=False,
+               verbosity=0):
+    """ Converts a CHARMM36 .str topology to a GROMACS compatible one
+
+    :param str str_file: str topology to be converted
+    :param str mol2_file: mol2 structure file
+    :param str mol_name: name of the molecule, must match both .mol2 and .str residue name
+    :param str force_field_dir: read a GROMACS-compatible CHARMM force field from this dir; None: auto detect from pwd
+    :param str output_dir: save resulting files to this dir; if None, file contents will be returned, if a path is
+     supplied, the path to the converted files will be returned
+    :param bool no_checks: ignore checks and try to keep going
+    :param int verbosity: verbosity level
+    """
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        script_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools',
+                                   'cgenff_charmm2gmx_py3.py')
+        shutil.copy2(mol2_file, tmpdirname)
+        shutil.copy2(str_file, tmpdirname)
+        shutil.copytree(force_field_dir, os.path.join(tmpdirname, os.path.basename(force_field_dir)))
+        cmdline = [script_path, '--mol_name', mol_name, '--mol2', os.path.basename(mol2_file),
+                   '--str', os.path.basename(str_file), '--forcefield', os.path.basename(force_field_dir),
+                   '--include_atomtypes']
+        os_util.local_print('Executing cgenff_charmm2gmx_py3.py with cmd="{}"'.format(' '.join(cmdline)),
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        with subprocess.Popen(cmdline, cwd=tmpdirname, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True) as this_process:
+            stdout, stderr = this_process.communicate()
+            return_code = this_process.returncode
+        if return_code != 0:
+            os_util.local_print('Failed to convert {} topology using cgenff_charmm2gmx_py3.py. The error '
+                                'message was:\n{}\n\nFull cgenff_charmm2gmx_py3.py output:\n{}'
+                                ''.format(str_file, stderr, stdout),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            os_util.local_print('{:=^50}\n{}'.format(' cgenff_charmm2gmx_py3.py output ', stdout, '=' * 50),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+            raise subprocess.SubprocessError(stderr)
+        else:
+            if output_dir is not None:
+                for each_extension in ['itp', 'prm']:
+                    this_file_name = ''.join([mol_name, os.extsep, each_extension])
+                    try:
+                        os_util.file_copy(os.path.join(tmpdirname, this_file_name), output_dir, error_if_exists=True,
+                                          verbosity=verbosity)
+                    except FileExistsError:
+                        if no_checks:
+                            os_util.local_print('Converted {} to a GROMACS-compatible topology, but a {} file '
+                                                'exists in {}. Because you are running with no_checks, I AM '
+                                                'OVERWRITING {}!'
+                                                ''.format(str_file, this_file_name, output_dir,
+                                                          os.path.join(output_dir, this_file_name)),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            os_util.file_copy(os.path.join(tmpdirname, this_file_name), output_dir)
+                        else:
+                            os_util.local_print('Converted {} to a GROMACS-compatible topology, but a {} file '
+                                                'exists in {}, so I will not overwrite it. Use {} as '
+                                                'topology or move/remove it and run again. You can also rerun '
+                                                'with no_checks, so that files will be overwritten.'
+                                                ''.format(str_file, this_file_name, output_dir, this_file_name),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise FileExistsError('File {} exists'.format(os.path.join(output_dir, this_file_name)))
+                    else:
+                        os_util.local_print('Converted {} to the GROMACS-compatible topology {}'
+                                            ''.format(str_file, os.path.join(output_dir, this_file_name)),
+                                            msg_verbosity=os_util.verbosity_level.info,
+                                            current_verbosity=verbosity)
+                return {mol_name + os.extsep + each_extension: os.path.join(output_dir,
+                                                                            mol_name + os.extsep + each_extension)
+                        for each_extension in ['itp', 'prm']}
+            else:
+                return_data = {}
+                for each_extension in ['itp', 'prm']:
+                    this_file_name = ''.join([mol_name, os.extsep, each_extension])
+                    return_data[this_file_name] = os_util.read_file_to_buffer(os.path.join(tmpdirname, this_file_name))
+                return return_data
 
 
 def generate_water_perturbation(dual_molecule_ligand, water_dir, topology_file, protein_topology_files,
@@ -2067,7 +2194,8 @@ def prepare_steps(lambda_value, lambda_dir, dir_list, topology_file, structure_f
                   '-n', os.path.join(morph_dir, md_dir, '..', '..', index_file),
                   "-p", os.path.join(morph_dir, md_dir, '..', topology_file),
                   '-maxwarn', str(gmx_maxwarn)]
-    grompp_cmd = os_util.assemble_shell_command(gmx_path, input_list, output_file=new_file_names_dict['grompp_nocont_log'],
+    grompp_cmd = os_util.assemble_shell_command(gmx_path, input_list,
+                                                output_file=new_file_names_dict['grompp_nocont_log'],
                                                 verbosity=verbosity)
     grompp_cmd = '[ ! -f {} ] && {{ {} }}'.format(new_file_names_dict['md_nocont_tpr'], grompp_cmd)
     output_data.append(grompp_cmd)
@@ -2475,8 +2603,9 @@ if __name__ == '__main__':
     elif isinstance(arguments.mcs_custom_mcs, list):
         if len(arguments.mcs_custom_mcs) % 3 != 0:
             from numpy import arange
+
             custom_mcs_data = {}
-            for (i1, i2, j) in [arange(3*i, 3*i+3) for i in range(len(arguments.mcs_custom_mcs))]:
+            for (i1, i2, j) in [arange(3 * i, 3 * i + 3) for i in range(len(arguments.mcs_custom_mcs))]:
                 key = frozenset([arguments.mcs_custom_mcs[i1], arguments.mcs_custom_mcs[i2]])
                 custom_mcs_data[key] = arguments.mcs_custom_mcs[j]
         else:
@@ -2725,6 +2854,7 @@ if __name__ == '__main__':
         # User supplied a perturbation map instead of using the saved map in progress file. Create a graph and save it
         # to progress file
         import networkx
+
         perturbation_graph = networkx.DiGraph()
         [perturbation_graph.add_edge(i, j, **data) for (i, j), data in perturbation_map.items()]
         progress_data['perturbation_map'] = perturbation_graph.copy()
@@ -2811,9 +2941,15 @@ if __name__ == '__main__':
         else:
             new_pairs_list.append(morph_pair)
 
-    os_util.local_print('Existing directories (will not be overwritten): {}'.format(', '.join(existing_dir_list)),
-                        msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
-    os_util.local_print('I will work on these directories: {}'.format(new_pairs_list),
+    if existing_dir_list:
+        os_util.local_print('Existing directories (will not be overwritten): {}'.format(', '.join(existing_dir_list)),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
+    else:
+        os_util.local_print('I found no existing dir to be kept.',
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
+
+    os_util.local_print('I will work on these perturbations: {}'
+                        ''.format(', '.join(['{}\u2192{}'.format(*i) for i in new_pairs_list])),
                         msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
     os_util.local_print('{:=^50}\n{} {} {}'.format(' Working on pairs ', 'Perturbation', 'Pose', 'Coordinates'),
                         msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
@@ -2951,7 +3087,7 @@ if __name__ == '__main__':
 
             solvate_data = {'water_model': arguments.buildsys_water, 'water_shell': arguments.buildsys_watershell,
                             'ion_concentration': arguments.buildsys_ionconcentration,
-                            'pname': arguments. buildsys_pname, 'nname': arguments.buildsys_nname,
+                            'pname': arguments.buildsys_pname, 'nname': arguments.buildsys_nname,
                             'box_type': arguments.buildsys_boxtype}
 
             build_data = prepare_complex_system(structure_file=arguments.structure,
@@ -3125,7 +3261,7 @@ if __name__ == '__main__':
             with open(this_runall_script, 'w') as fh:
                 fh.write(header_command + '\n\n')
                 if output_data['run_before']:
-                    fh.write(output_data['run_before']+'\n')
+                    fh.write(output_data['run_before'] + '\n')
                 fh.write('\n\necho "$(date): Starting equilibration in {} {} at $(hostname)"\n\n'
                          ''.format(morph_dir, each_system))
                 fh.write('\n'.join(equilibration_output))
@@ -3144,7 +3280,7 @@ if __name__ == '__main__':
                              ''.format(morph_dir, each_system))
                     fh.write(output_data['constantpart']['analysis'] + '\n')
                 if output_data['run_after']:
-                    fh.write(output_data['run_after']+'\n')
+                    fh.write(output_data['run_after'] + '\n')
 
             output_script_list.append('lastjid+=( $({} {} {}) )'
                                       ''.format(output_data['submit_command'], output_data['submission_args'],

@@ -22,7 +22,6 @@
 #
 
 import sys
-sys.path.extend(['/home/luancarvalho/Dropbox/Scripts/FEP_Automate/'])
 import os_util
 
 

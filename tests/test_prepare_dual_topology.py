@@ -59,30 +59,41 @@ def test_make_index_internal():
     from tempfile import TemporaryDirectory
     from filecmp import cmp
 
-    dir = TemporaryDirectory()
-    newfile = os.path.join(dir.name, '3ekv_index.ndx')
-    prepare_dual_topology.make_index(newfile, 'test_data/gromacs_index/3ekv.pdb')
-    assert cmp(newfile, 'test_data/gromacs_index/3ekv_gmx.ndx')
-    prepare_dual_topology.make_index(newfile, 'test_data/gromacs_index/3ekv.pdb',
-                                     index_data={'Protein_LIG': '"Protein" | "LIG"'})
-    assert cmp(newfile, 'test_data/gromacs_index/3ekv_gmx_protlig.ndx')
-
-    dir.cleanup()
+    with TemporaryDirectory() as tmpdir:
+        newfile = os.path.join(tmpdir, '3ekv_index.ndx')
+        prepare_dual_topology.make_index(newfile, os.path.join('test_data', 'gromacs_index', '3ekv.pdb'))
+        assert cmp(newfile, os.path.join('test_data', 'gromacs_index', '3ekv_gmx.ndx'))
+        prepare_dual_topology.make_index(newfile, os.path.join('test_data', 'gromacs_index', '3ekv.pdb'),
+                                         index_data={'Protein_LIG': '"Protein" | "LIG"'})
+        assert cmp(newfile, os.path.join('test_data', 'gromacs_index', '3ekv_gmx_protlig.ndx'))
 
 
 def test_make_index_mdanalysis():
     from tempfile import TemporaryDirectory
     from filecmp import cmp
 
-    dir = TemporaryDirectory()
-    newfile = os.path.join(dir.name, '3ekv_index.ndx')
-    prepare_dual_topology.make_index(newfile, 'test_data/gromacs_index/3ekv.pdb', method='mdanalysis')
-    assert cmp(newfile, 'test_data/gromacs_index/3ekv_mdanalysis.ndx')
-    prepare_dual_topology.make_index(newfile, 'test_data/gromacs_index/3ekv.pdb',
-                                     index_data={'Around_LIG': 'byres (around 3.5 resname LIG)'}, method='mdanalysis')
-    assert cmp(newfile, 'test_data/gromacs_index/3ekv_mdanalysis_aroundlig.ndx')
+    with TemporaryDirectory() as tmpdir:
+        newfile = os.path.join(tmpdir, '3ekv_index.ndx')
+        prepare_dual_topology.make_index(newfile, 'test_data/gromacs_index/3ekv.pdb', method='mdanalysis')
+        assert cmp(newfile, 'test_data/gromacs_index/3ekv_mdanalysis.ndx')
+        prepare_dual_topology.make_index(newfile, 'test_data/gromacs_index/3ekv.pdb',
+                                         index_data={'Around_LIG': 'byres (around 3.5 resname LIG)'}, method='mdanalysis')
+        assert cmp(newfile, 'test_data/gromacs_index/3ekv_mdanalysis_aroundlig.ndx')
 
-    dir.cleanup()
+
+def test_str_to_gmx():
+    from tempfile import TemporaryDirectory
+    from filecmp import cmp
+
+    with TemporaryDirectory() as tmpdir:
+        ff_dir = os.path.join('test_data', 'str_to_gmx', 'charmm36-feb2021.ff')
+        for ligname in ['f12', 'f76']:
+            str_file = os.path.join('test_data', 'str_to_gmx', ligname + os.extsep + 'str')
+            mol2_file = os.path.join('test_data', 'str_to_gmx', ligname + os.extsep + 'mol2')
+            gmx_files = prepare_dual_topology.str_to_gmx(str_file=str_file, mol2_file=mol2_file, mol_name=ligname,
+                                                         force_field_dir=ff_dir, output_dir=tmpdir, verbosity=-1)
+            for each_name, each_path in gmx_files.items():
+                assert cmp(os.path.join('test_data', 'str_to_gmx', ligname + os.path.splitext(each_path)[1]), each_path)
 
 
 if __name__ == '__main__':
@@ -90,7 +101,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Tests prepare_dual_topology.align_ligands')
     parser.add_argument('tests', type=str, nargs='*',
-                        default=['parse_ligands_data', 'prepare_output_scripts_data', 'make_index'],
+                        default=['parse_ligands_data', 'prepare_output_scripts_data', 'make_index', 'str_to_gmx'],
                         help="Run these tests (options: parse_ligands_data; default: (run all tests)")
     arguments = parser.parse_args()
 
@@ -99,7 +110,9 @@ if __name__ == '__main__':
             test_parse_ligands_data()
         elif each_test == 'prepare_output_scripts_data':
             test_prepare_output_scripts_data()
-        if each_test == 'make_index':
+        elif each_test == 'make_index':
             test_make_index_internal()
+        elif each_test == 'str_to_gmx':
+            test_str_to_gmx()
         else:
             raise ValueError('Unknown test {}'.format(each_test))

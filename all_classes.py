@@ -812,9 +812,13 @@ class TopologyData:
                 if this_term_name == 'PairData':
                     return_data.append(each_element)
                 else:
-                    os_util.local_print('Could not find an online parameter for "{}" while parsing line '
-                                        '{}. Please, make sure your topology includes all the required '
-                                        'parameters.'
+                    os_util.local_print('Could not find an online parameter for "{}" while parsing line {}. Please, '
+                                        'make sure your topology includes all the required parameters. The likely '
+                                        'cause for this is that your ligand topology uses parameters from the force '
+                                        'field which are not included in the ligand topology. This is, in principle, '
+                                        'not supported. Specifically, if you used CGenFF, make sure to select '
+                                        '"Include parameters that are already in CGenFF". Please, see the manual for '
+                                        'further info regarding this topic and your alternatives.'
                                         ''.format(' '.join(map(str, this_index)), each_element),
                                         msg_verbosity=os_util.verbosity_level.error)
                     raise KeyError(error)
@@ -850,8 +854,12 @@ class TopologyData:
         :param str atom_string: atom line
         :param MoleculeTypeData molecule_type: MoleculeTypeData object to associate atom to
         """
-
-        this_atom = self.__atom_data(*self.type_converter(atom_string))
+        try:
+            this_atom = self.__atom_data(*self.type_converter(atom_string))
+        except TypeError as error:
+            os_util.local_print('Error while parsing atom data:\n{}'.format(self.type_converter(atom_string)),
+                                msg_verbosity=os_util.verbosity_level.error)
+            raise KeyError(error)
         try:
             molecule_type.atoms_dict[int(this_atom.atom_index)] = this_atom
         except TypeError as error:
@@ -1214,11 +1222,9 @@ class TopologyData:
                                                                                     'constrainttypes'])}
 
         full_topology_file = []
-        try:
-            [full_topology_file.extend(os_util.read_file_to_buffer(each_file, return_as_list=True, die_on_error=True))
-             for each_file in topology_files]
-        except TypeError:
-            os_util.local_print('')
+        for each_file in topology_files:
+            each_file_data = os_util.read_file_to_buffer(each_file, return_as_list=True, die_on_error=True)
+            full_topology_file.extend(each_file_data)
 
         # Main loop
         file_marker = None

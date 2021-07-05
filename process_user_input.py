@@ -83,7 +83,7 @@ def read_options(argument_parser, unpack_section='', user_config_file=None, defa
         read_data = internals.read(default_internal_file)
 
     if not read_data:
-        os_util.local_print('Failed to read interal data file. Cannot continue. Check your install, this should not '
+        os_util.local_print('Failed to read internal data file. Cannot continue. Check your install, this should not '
                             'happen'.format(default_internal_file if default_internal_file else 'config/internal.ini'),
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
         raise SystemExit(-1)

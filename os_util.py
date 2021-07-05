@@ -23,6 +23,7 @@
 import itertools
 import re
 import os
+import shutil
 import subprocess
 from io import TextIOBase
 from collections import namedtuple
@@ -117,11 +118,6 @@ def run_gmx(gmx_bin, arg_list, input_data='', output_file=None, return_output=Fa
     :param bool die_on_error: raise error if command returns a error code
     :param int verbosity: verbose level
     """
-
-    local_print('Entering run_gmx(gmx_bin={}, arg_list={}, input_data={}, output_file={}, return_output={}, '
-                'alt_environment={}, cwd={}, verbosity={})'
-                ''.format(gmx_bin, arg_list, input_data, output_file, return_output, alt_environment, cwd, verbosity),
-                msg_verbosity=verbosity_level.debug, current_verbosity=verbosity)
 
     this_env = os.environ.copy()
     if alt_environment is not None:
@@ -404,3 +400,24 @@ def inner_set_search(needle, haystack, die_on_error=True):
         else:
             return False
     return idx
+
+
+def file_copy(src, dest, follow_symlinks=True, error_if_exists=False, verbosity=0):
+    """ Copy file, data and metadata, optionally returning an error if dest exists
+
+    :param str src: source file
+    :param str dest: destination file or path
+    :param bool follow_symlinks: if false, and src is a symbolic link, dst will be created as a symbolic link; if true
+                                 and src is a symbolic link, dst will be a copy of the file src refers to.
+    :param bool error_if_exists: raise an error if file exists
+    :param int verbosity: verbosity level
+    :return: str
+    """
+
+    if error_if_exists and (os.path.exists(dest) and not os.path.isdir(dest)):
+        destfile = os.path.join(dest, os.path.basename(src)) if os.path.isdir(dest) else dest
+        raise FileExistsError("File {} exists".format(destfile))
+    else:
+        local_print('Copying {} to {}'.format(src, dest),
+                    current_verbosity=verbosity, msg_verbosity=verbosity_level.debug)
+        return shutil.copy2(src, dest, follow_symlinks=follow_symlinks)
