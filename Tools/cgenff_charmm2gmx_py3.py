@@ -938,9 +938,8 @@ class atomgroup:
                 # jal - if we have correctly ignored bonds to LP then there is no need
                 # for any check here
                 if check_nbonds != self.nbonds:
-                    print(
-                        "Error in atomgroup.py: read_mol2_coor_only: no. of bonds in mol2 (%d) and top (%d) are "
-                        "unequal" % (check_nbonds, self.nbonds))
+                    print("Error in atomgroup.py: read_mol2_coor_only: no. of bonds in mol2 (%d) and top (%d) are "
+                          "unequal" % (check_nbonds, self.nbonds))
                     # print check_nbonds,self.nbonds
                     exit()
 
@@ -965,6 +964,7 @@ class atomgroup:
                     self.coord[atomi][0] = float(entry[2])
                     self.coord[atomi][1] = float(entry[3])
                     self.coord[atomi][2] = float(entry[4])
+                    self.G.nodes[atomi]['subst_name'] = entry[7]
                     ## jal - if we have an atom that is the host for a LP, insert
                     ## the LP into the list
                     if is_lp_host_atom(self, self.G.nodes[atomi]['name']):
@@ -1047,6 +1047,113 @@ class atomgroup:
                      self.coord[atomi][0], self.coord[atomi][1], self.coord[atomi][2], 1.0, self.G.nodes[atomi]['beta']))
         f.write("END\n")
 
+    def edit_mol2_file(self, mol2_input, mol2_output):
+        """ Edits an input mol2 file, adding LP if needed.
+
+        :param str mol2_input: input mol2 file
+        :param str mol2_output: saves edited version to this file
+        """
+
+        # NOTE: assuming that no other vsite in the topology, which is pretty much the assumption of this script
+        if self.nvsites == 0:
+            # No lone pair found, just copy the original file
+            from shutil import copy
+            copy(mol2_input, mol2_output)
+            return
+
+        output_data = []
+        idx = -1
+        current_section = ''
+        num_atoms = 0
+        num_bonds = 0
+        insert_after = []
+
+        # Process lines of the input mol2, copying data to output_data
+        with open(mol2_input) as fh:
+            for line_num, each_line in enumerate(fh):
+                if current_section == 'MOLE' and line_num == idx + 2:
+                    # Edit the number of number of atoms and bond
+                    line_data = [int(i) for i in each_line.split()]
+                    num_atoms = line_data[0]
+                    line_data[0] += self.nvsites
+                    num_bonds = line_data[1]
+                    line_data[1] += self.nvsites
+                    each_line = '  '.join([str(i) for i in line_data]) + '\n'
+                elif current_section == 'ATOM' and line_num == idx + num_atoms:
+                    # This is the last atom line, add the lone pairs. Lone pair data is stored in the first nodes in
+                    # the graph, even if they bears no relation to the lone.
+                    for i in range(0, self.nvsites):
+                        # Builds a mol2 atom line: atom_id atom_name x y z atom_type [subst_id [subst_name [charge]]]
+
+                        # (Based on code above). Gets the LP data
+                        this_atom = self.G.nodes[i]
+                        atn1 = this_atom['at1']               # atom name
+                        atn2 = this_atom['at2']               # atom name
+                        dist = this_atom['dist'] * 10         # Dist, convert to Angstroms
+                        subst_id = this_atom['resid']         # Res/subst id
+                        subst_name = this_atom['subst_name']  # Res/subst id
+
+                        # get atom indices
+                        at1 = 0
+                        at2 = 0
+                        for each_num, each_atom in self.G.nodes(data=True):
+                            if each_atom['name'] == self.G.nodes[i]['vsite']:
+                                charge = each_atom['charge']
+                            if each_atom['name'] == atn1:
+                                at1 = each_num
+                            if each_atom['name'] == atn2:
+                                at2 = each_num
+
+                        # in case of failure
+                        if at1 == 0 and at2 == 0:
+                            print("Failed to match LP-constructing atoms in edit_mol2_file!\n")
+                            raise SystemExit(1)
+
+                        # at1, at2, and dist only exist in vsite structure!
+                        xlp, ylp, zlp = construct_lp(*self.coord[at1], *self.coord[at2], dist)
+
+                        # Build atom data as atom_id atom_name x y z atom_type [subst_id [subst_name [charge]]]
+                        this_line = '{:>7} {:>3} {:>14.4f} {:>9.4f} {:>9.4f} {:<3} {:>7} {} {:>14.4f}\n' \
+                                    ''.format(num_atoms + i + 1, self.G.nodes[i]['vsite'], xlp, ylp, zlp, 'Du',
+                                              subst_id, subst_name, charge)
+                        # this_line = ''.join([str(d) for d in atom_data])
+                        insert_after.append(this_line)
+
+                elif current_section == 'BOND' and line_num == idx + num_bonds:
+                    # This is the last bond line, add the lone pairs' bonds
+                    for i in range(0, self.nvsites):
+                        this_atom = self.G.nodes[i]
+
+                        atn1 = this_atom['at1']  # atom name
+                        for each_num, each_atom in self.G.nodes(data=True):
+                            if this_atom['vsite'] == each_atom['name']:
+                                lp_idx = each_num
+                                break
+                        for each_num, each_atom in self.G.nodes(data=True):
+                            if each_atom['name'] == atn1:
+                                at1 = each_num
+                        # Build bond data as bond_id origin_atom_id target_atom_id bond_type
+                        this_line = '{:>6} {:>4} {:>4} {}\n'.format(num_bonds + i + 1, lp_idx + 1, at1 + 1, 'du')
+                        insert_after.append(this_line)
+
+                # Update current_section
+                if each_line.startswith("@<TRIPOS>MOLECULE"):
+                    current_section = "MOLE"
+                    idx = line_num
+                elif each_line.startswith("@<TRIPOS>ATOM"):
+                    current_section = "ATOM"
+                    idx = line_num
+                elif each_line.startswith("@<TRIPOS>BOND"):
+                    current_section = "BOND"
+                    idx = line_num
+
+                output_data.append(each_line)
+                if insert_after:
+                    output_data.extend(insert_after)
+                    insert_after = []
+
+        with open(mol2_output, 'w') as f:
+            f.writelines(output_data)
 
 # =================================================================================================================
 
@@ -1057,6 +1164,7 @@ arg_handler.add_argument('--mol2', type=str, required=True, help='Mol2 file')
 arg_handler.add_argument('--str', type=str, required=True, help='str file')
 arg_handler.add_argument('--forcefield', type=str, default=None, help='Folder for forcefield (Default: try to '
                                                                       'detect from pwd')
+arg_handler.add_argument('--output_mol2', type=str, default=None, help='Save edited structure to this mol2 file')
 arg_handler.add_argument('--include_atomtypes', action='store_true', help='Include atomtype directives (Default: off)')
 arguments = arg_handler.parse_args()
 
@@ -1065,8 +1173,13 @@ mol2_name = arguments.mol2
 rtp_name = arguments.str
 if arguments.forcefield is None:
     from os import listdir
-    ffdir = [eachfile for eachfile in sorted(listdir())
-             if eachfile.find('charmm36') == 0 and eachfile.rfind('.ff') == len(eachfile) - 3][0]
+    try:
+        ffdir = [eachfile for eachfile in sorted(listdir())
+                 if eachfile.find('charmm36') == 0 and eachfile.endswith('.ff')][0]
+    except IndexError:
+        print('Failed to find a forcefield dir in $PWD, please use --forcefield')
+        exit(1)
+
 else:
     ffdir = arguments.forcefield
 atomtypes_filename = ffdir + "/atomtypes.atp"
@@ -1103,9 +1216,11 @@ rtplines = get_charmm_rtp_lines(rtp_name, mol_name)
 m.read_charmm_rtp(rtplines, atomtypes)
 
 m.read_mol2_coor_only(mol2_name)
-f = open(initpdbfile, 'w')
-m.write_pdb(f)
-f.close()
+with open(initpdbfile, 'w') as f:
+    m.write_pdb(f)
+
+if arguments.output_mol2:
+    m.edit_mol2_file(mol2_name, arguments.output_mol2)
 
 prmlines = get_charmm_prm_lines(rtp_name)
 params = parse_charmm_parameters(prmlines)

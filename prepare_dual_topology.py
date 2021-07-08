@@ -239,8 +239,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
         if water_str is not None:
             communicate_str += '{}\n'.format(water_str)
 
-    os_util.run_gmx(gmx_bin, pdb2gmx_list, communicate_str, build_files_dict['pdb2gmx_log'],
-                    verbosity=verbosity)
+    os_util.run_gmx(gmx_bin, pdb2gmx_list, communicate_str, build_files_dict['pdb2gmx_log'], verbosity=verbosity)
 
     # 2. Assemble the complex
 
@@ -860,17 +859,18 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
         elif len(each_data['topology']) == 2:
             files_set = {os.path.splitext(each_data['topology'][0])[1], os.path.splitext(each_data['topology'][1])[1]}
             if files_set == {'.str', '.ff'}:
+                # Get a ff dir and the input str
                 force_field_dir = [filename for filename in each_data['topology']
                                    if os.path.splitext(filename)[1] == '.ff'][0]
-                # Try to find a .mol2 file in the input
-                mol2_file = [filename for filename in old_ligand_dict[each_name]
-                             if os.path.splitext(filename)[1] == '.mol2']
                 str_file = [filename for filename in each_data['topology']
                             if os.path.splitext(filename)[1] == '.str'][0]
+                # Try to find a .mol2 file in the input, check if successful
+                mol2_file = [filename for filename in old_ligand_dict[each_name]
+                             if os.path.splitext(filename)[1] == '.mol2']
                 if len(mol2_file) == 1:
                     mol2_file = mol2_file[0]
                     os_util.local_print('Based on your input topology for molecule {}, I detected you are using CGenFF '
-                                        'topology in str format and supplied a forcefield ({}). Starting automatic '
+                                        'topology in str format and supplied a force field ({}). Starting automatic '
                                         'conversion using {}. If you need finer control over topology conversion, '
                                         'please do it before calling {}'
                                         ''.format(each_name, force_field_dir, mol2_file, os.path.basename(__file__)),
@@ -879,7 +879,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                 else:
                     if no_checks:
                         mol2_file = os.path.join(os.path.dirname(str_file),
-                                                 os.path.splitext(str_file)[1] + os.extsep + 'mol2')
+                                                 os.path.splitext(str_file)[0] + os.extsep + 'mol2')
                         os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
                                             'correspondingly .mol2 file was found. Because you are running with '
                                             'no_checks, I will try to generate a {} file from the inputs. Be aware '
@@ -899,7 +899,19 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                 output_files = str_to_gmx(str_file=str_file, mol2_file=mol2_file, mol_name=each_name,
                                           force_field_dir=force_field_dir, output_dir=os.path.dirname(str_file),
                                           no_checks=no_checks, verbosity=verbosity)
-                ligand_dict[each_name]['topology'] = list(output_files.values())
+                ligand_dict[each_name]['topology'] = output_files['topology']
+
+                temp_mol = rdkit.Chem.MolFromMol2File(output_files['molecule'], removeHs=False)
+                if temp_mol is None:
+                    os_util.local_print('Failed to read molecule {} as a {} file. Please, check your input.'
+                                        ''.format(each_field, this_ext),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise SystemExit(-1)
+                ligand_dict[each_name]['molecule'] = temp_mol
+                os_util.local_print('Replaced molecule with the one in {}, following the'
+                                    ''.format(output_files['molecule']),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
         elif len(each_data['topology']) == 1 and os.path.splitext(each_data['topology'][0])[1] == '.str':
             os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
                                 'force field directory was found. A .ff directory is required to convert '
@@ -1327,6 +1339,7 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
      supplied, the path to the converted files will be returned
     :param bool no_checks: ignore checks and try to keep going
     :param int verbosity: verbosity level
+    :rtype: dict
     """
 
     with tempfile.TemporaryDirectory() as tmpdirname:
@@ -1335,9 +1348,10 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
         shutil.copy2(mol2_file, tmpdirname)
         shutil.copy2(str_file, tmpdirname)
         shutil.copytree(force_field_dir, os.path.join(tmpdirname, os.path.basename(force_field_dir)))
+        edited_mol2 = mol_name + '_alt' + os.extsep + 'mol2'
         cmdline = [script_path, '--mol_name', mol_name, '--mol2', os.path.basename(mol2_file),
                    '--str', os.path.basename(str_file), '--forcefield', os.path.basename(force_field_dir),
-                   '--include_atomtypes']
+                   '--output_mol2', edited_mol2, '--include_atomtypes']
         os_util.local_print('Executing cgenff_charmm2gmx_py3.py with cmd="{}"'.format(' '.join(cmdline)),
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
         with subprocess.Popen(cmdline, cwd=tmpdirname, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1353,9 +1367,10 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             raise subprocess.SubprocessError(stderr)
         else:
+            output_files = [mol_name + os.extsep + each_extension for each_extension in ['prm', 'itp']]
+            output_files += [edited_mol2]
             if output_dir is not None:
-                for each_extension in ['itp', 'prm']:
-                    this_file_name = ''.join([mol_name, os.extsep, each_extension])
+                for this_file_name in output_files:
                     try:
                         os_util.file_copy(os.path.join(tmpdirname, this_file_name), output_dir, error_if_exists=True,
                                           verbosity=verbosity)
@@ -1383,14 +1398,15 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                                             ''.format(str_file, os.path.join(output_dir, this_file_name)),
                                             msg_verbosity=os_util.verbosity_level.info,
                                             current_verbosity=verbosity)
-                return {mol_name + os.extsep + each_extension: os.path.join(output_dir,
-                                                                            mol_name + os.extsep + each_extension)
-                        for each_extension in ['itp', 'prm']}
+                return_data = {'topology': [os.path.join(output_dir, mol_name + os.extsep + each_extension)
+                                            for each_extension in ['prm', 'itp']],
+                               'molecule': os.path.join(output_dir, edited_mol2)}
+                return return_data
             else:
-                return_data = {}
-                for each_extension in ['itp', 'prm']:
-                    this_file_name = ''.join([mol_name, os.extsep, each_extension])
-                    return_data[this_file_name] = os_util.read_file_to_buffer(os.path.join(tmpdirname, this_file_name))
+                return_data = {'topology': [os_util.read_file_to_buffer(os.path.join(tmpdirname, mol_name + os.extsep
+                                                                                     + each_extension))
+                                            for each_extension in ['prm', 'itp']],
+                               'molecule': os_util.read_file_to_buffer(os.path.join(tmpdirname, edited_mol2))}
                 return return_data
 
 
@@ -3006,7 +3022,6 @@ if __name__ == '__main__':
                                 'your input. mcs_custom_mcs is "{}"'.format(arguments.mcs_custom_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
             raise SystemExit(-1)
-
         # From individual files, prepare a dual topology molecule and topology
         merged_data = merge_topologies.merge_topologies(ligands_dict[state_a_name]['molecule'],
                                                         ligands_dict[state_b_name]['molecule'],

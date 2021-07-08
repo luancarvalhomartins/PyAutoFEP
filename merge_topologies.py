@@ -474,8 +474,8 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
 
     :param rdkit.Chem.rdkit molecule_a: molecule A
     :param rdkit.Chem.rdkit molecule_b: molecule B
-    :param list file_topology1: Gromacs-compatible topology of molecule 1
-    :param list file_topology2: Gromacs-compatible topology of molecule 2
+    :param list file_topology1: GROMACS-compatible topology of molecule 1
+    :param list file_topology2: GROMACS-compatible topology of molecule 2
     :param bool no_checks: ignore all tests and try to go on
     :param savestate_util.SavableState savestate: saved state data
     :param str mcs: use this SMARTS as common core to merge molecules
@@ -812,6 +812,12 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
     # Adjust query
     core_structure = mol_util.adjust_query_properties(core_structure, verbosity=verbosity)
 
+    if rdkit.Chem.SanitizeMol(molecule2_embed, catchErrors=True) != 0:
+        os_util.local_print('Failed to process molecule {}. Error during sanitization, prior to virtual site '
+                            'processing. Cannot continue, please check the input molecules.'
+                            ''.format(molecule2_embed))
+        raise SystemExit(1)
+
     try:
         ConstrainedEmbed(molecule2_embed, core_structure, enforceChirality=True)
     except ValueError as error:
@@ -1038,7 +1044,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     if all([each_mol.GetNumAtoms() == each_mol.GetNumHeavyAtoms() for each_mol in mol_list]):
         os_util.local_print('No molecules from mol_list {} bear hydrogen atoms. Returning first MCS as final MCS.'
                             .format([rdkit.Chem.MolToSmiles(each_mol) for each_mol in mol_list]),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
         mcs_result = all_classes.MCSResult(rdkit.Chem.MolToSmarts(common_struct_mol))
         if savestate:

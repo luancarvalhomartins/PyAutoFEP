@@ -1203,10 +1203,6 @@ class TopologyData:
         :param int verbosity: print extra info
         """
 
-        os_util.local_print('Entering TopologyData.read_topology(self={}, full_topology_file={}, verbosity={})'
-                            ''.format(repr(self), topology_files, verbosity),
-                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-
         supress_code = -1
 
         # Terms listed in Gromacs manual 5.5

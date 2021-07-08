@@ -132,4 +132,3 @@ def superimpose_poses(ligand_data, reference_pose_mol, save_state=None, num_thre
                         msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
 
     return new_docking_poses_data
-
