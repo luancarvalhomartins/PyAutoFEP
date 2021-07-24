@@ -12,9 +12,9 @@ provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in 
 - [GROMACS](https://www.gromacs.org/) 2016 or newer
 - Python 3.6+
 - [rdkit](https://www.rdkit.org/) 2019.03+
-- [networkx](https://networkx.org) 2.3
+- [networkx](https://networkx.org) 2.X (1.X versions are not supported)
 - [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3 & [pymbar](https://github.com/choderalab/pymbar) 3.0.4
-- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*. openbabel 3.X is not currently not supported.)
+- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*. openbabel 3.X is not currently not supported, but eventually will)
 - matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation_map.py*)
 - numpy (required only in *analyze_results.py*)
 
@@ -53,7 +53,7 @@ pip install pymbar alchemlyb
 A tutorial using the Farnesoid X receptor and a series of rigid binders is available. We plan to add more tutorials, covering specific aspects of PyAutoFEP using in the near future.
 
 ## Issues & pull requests
-Issues and pull requests are welcome. But, please, fill/request it against https://github.com/lmmpf/PyAutoFEP.
+Issues and pull requests are welcome. When filling a GitHub issue, please include as much details as possible. Inputs and verbose outputs are also useful (if available/relevant). And thanks for reporting bugs!
 
 ## Citation
 If PyAutoFEP is used in scientific publications, please cite:
