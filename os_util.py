@@ -36,7 +36,7 @@ verbosity_level = namedtuple("VerbosityLevel", "error default warning info debug
 def makedir(dir_name, error_if_exists=False, parents=False, verbosity=0):
     """ Safely create a directory
 
-    :param str dir_name:  name of the directory to be created
+    :param str dir_name: name of the directory to be created
     :param bool error_if_exists: throw an error if dir_name exists
     :param bool parents: create parent dirs as needed
     :param int verbosity: sets th verbosity level
@@ -382,24 +382,51 @@ def starmap_unpack(function, pool, args_iter=None, kwargs_iter=None):
     return pool.starmap(wrapper_fn, list(assembled_args))
 
 
-def inner_set_search(needle, haystack, die_on_error=True):
-    """ Search for needle in items in haystack
+def inner_search(needle, haystack, apply_filter=None, find_last=False, die_on_error=False):
+    """ Search for needle in items in haystack, returning the index of the first found occurrence
 
-    :param set needle: what to search
+    :param needle: what to search. If callable, needle will be called for each item in haystack.
     :param list haystack: where to search
+    :param [str, function] apply_filter: filterfalse lines using this function or, if str, by removing strings that
+                                         starts with apply_filter
+    :param bool find_last: search for the last occurrence instead of the first one
     :param bool die_on_error: when needle not in haystack, if true, raise VauleError, if False, return False
     :return: int
     """
 
-    for idx, i in enumerate(haystack):
-        if needle.issubset(i):
-            break
-    else:
-        if die_on_error:
-            raise ValueError("{} not in the iterator".format(needle))
+    def search_func(needle, item):
+        if callable(needle):
+            return needle(item)
+        elif isinstance(needle, set) and isinstance(item, set):
+            return needle.issubset(item)
         else:
+            try:
+                return needle in item
+            except TypeError:
+                return needle == item
+
+    if apply_filter is not None and not callable(apply_filter):
+        filter_str = apply_filter
+        apply_filter = lambda line: line.startswith(filter_str)
+
+    last_occur, idx = -1, -1
+    for idx, i in enumerate(haystack):
+        if apply_filter is not None and apply_filter(i):
+            continue
+        if search_func(needle, i):
+            if find_last:
+                last_occur = idx
+            else:
+                break
+    else:
+        if die_on_error and ((not find_last) or (find_last and last_occur == -1)):
+            raise ValueError("{} not in the iterator".format(needle))
+        elif (not die_on_error) and ((not find_last) or (find_last and last_occur == -1)):
             return False
-    return idx
+    if find_last:
+        return last_occur
+    else:
+        return idx
 
 
 def file_copy(src, dest, follow_symlinks=True, error_if_exists=False, verbosity=0):

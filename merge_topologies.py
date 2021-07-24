@@ -1087,7 +1087,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
             if not each_atom_list:
                 continue
             each_mol[key] = set(each_atom_list)
-            current_iso = os_util.inner_set_search(set(each_atom_list), isotopes_list, die_on_error=False)
+            current_iso = os_util.inner_search(set(each_atom_list), isotopes_list, die_on_error=False)
             if current_iso is False:
                 isotopes_list.append(set(each_atom_list))
 
@@ -1102,7 +1102,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
                                     msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             elif this_atom_map[each_atom.GetIdx()]:
                 # This atom matches an atom from common core, set its isotope
-                new_isotope = os_util.inner_set_search(this_atom_map[each_atom.GetIdx()], isotopes_list) + 100
+                new_isotope = os_util.inner_search(this_atom_map[each_atom.GetIdx()], isotopes_list) + 100
                 each_atom.SetIsotope(new_isotope)
                 os_util.local_print('Atom {}{} matches common core, isotope = {}'
                                     ''.format(idx, each_atom.GetSymbol(), new_isotope),

@@ -184,6 +184,10 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
         block_array = numpy.concatenate((this_index, numpy.zeros(this_index.shape) + i, this_block[::-1].to_numpy()),
                                         axis=1)
         reversed_data = reversed_data.append(pandas.DataFrame(block_array, columns=columns).set_index(index))
+    print(reversed_data.index.levels[0])
+    print(reversed_data.index.levels[1])
+    import signal
+    os.kill(os.getpid(), signal.SIGINT)
     reversed_data.index = reversed_data.index.set_levels([reversed_data.index.levels[0],
                                                           reversed_data.index.levels[1].astype(int)])
 
@@ -1442,7 +1446,7 @@ if __name__ == '__main__':
                if '{}-{}'.format(mol_i, mol_j) == each_perturbation]
         if not key:
             if arguments.no_checks:
-                if not 'no_progress' in saved_data:
+                if 'no_progress' not in saved_data:
                     os_util.local_print('Failed to find a egde for {} in the perturbation graph. Because you are '
                                         'using no_checks, I will try to create a new edge on the graph and try to '
                                         'move on.'.format(each_perturbation), current_verbosity=arguments.verbose,

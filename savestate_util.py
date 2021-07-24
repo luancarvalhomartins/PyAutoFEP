@@ -120,6 +120,38 @@ class SavableState(Namespace):
     def __dict__(self):
         return dict(self)
 
+    def update_mol_image(self, mol_name, save=False, verbosity=0):
+        """ Generate mol images, if needed
+
+        :param str mol_name: name of the molecule to be updated
+        :param bool save: automatically save data
+        :param int verbosity: controls verbosity level
+        """
+
+        import rdkit.Chem
+        from rdkit.Chem.Draw import MolDraw2DSVG
+        from rdkit.Chem.AllChem import Compute2DCoords
+
+        this_mol = self.ligands_data[mol_name]['molecule']
+        if 'images' not in self.ligands_data[mol_name]:
+            draw_2d_svg = MolDraw2DSVG(300, 300)
+            temp_mol = rdkit.Chem.Mol(this_mol)
+            Compute2DCoords(temp_mol)
+            draw_2d_svg.DrawMolecule(temp_mol)
+            draw_2d_svg.FinishDrawing()
+            svg_data_hs = draw_2d_svg.GetDrawingText()
+
+            temp_mol = rdkit.Chem.RemoveHs(temp_mol)
+            Compute2DCoords(temp_mol)
+            draw_2d_svg = MolDraw2DSVG(300, 300)
+            draw_2d_svg.DrawMolecule(temp_mol)
+            draw_2d_svg.FinishDrawing()
+            svg_data_no_hs = draw_2d_svg.GetDrawingText()
+
+            self.ligands_data[mol_name]['images'] = {'2d_hs': svg_data_hs, '2d_nohs': svg_data_no_hs}
+        if not save:
+            self.save_data()
+
 
 class UserStorageDirectory:
 

@@ -133,7 +133,7 @@ def set_default_solvate_data(solvate_data):
 def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='FullSystem.top',
                            index_file='index.ndx', forcefield=1, index_groups=None,
                            selection_method='internal', gmx_bin='gmx', extradirs=None, extrafiles=None,
-                           solvate_data=None, ligand_name='LIG', gmx_maxwarn=1, verbosity=0, **kwargs):
+                           solvate_data=None, ligand_name='LIG', gmx_maxwarn=1, no_checks=False, verbosity=0, **kwargs):
     """ Builds a system using gmx tools
 
     :param str structure_file: receptor file (pdb)
@@ -150,8 +150,10 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     :param dict solvate_data: dictionary containing further data to solvate: 'water_model': water model to be used,
                               'water_shell': size of the water shell in A, 'ion_concentration': add ions to this conc,
                               'pname': name of the positive ion, 'nname': name of the negative ion}
-    :param int verbosity: sets verbosity
     :param str ligand_name: use this as ligand name
+    :param int gmx_maxwarn: passed to gmx grompp to suppress GROMACS warnings during system setup
+    :param bool no_checks: ignore checks and try to go on
+    :param int verbosity: sets verbosity
     :rtype: all_classes.Namespace
     """
 
@@ -184,7 +186,8 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                 current_verbosity=verbosity)
 
     # These are the intermediate build files
-    build_files_dict = {index: os.path.join(build_system_dir, filename.format(time.strftime('%H%M%S_%d%m%Y')))
+    timestamp = time.strftime('%H%M%S_%d%m%Y')
+    build_files_dict = {index: os.path.join(build_system_dir, filename.format(timestamp))
                         for index, filename in {'protein_pdb': 'protein_step1_{}.pdb',
                                                 'protein_top': 'protein_step1_{}.top',
                                                 'proteinlig_top': 'proteinlig_step1_{}.top',
@@ -287,9 +290,26 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     ligtop_list = ['\n', '; Include ligand topology\n', '#include "ligand.itp"\n', '\n']
     ligtop_list.reverse()
 
-    position = system_topology_list.index('; Include forcefield parameters\n')
+    position = os_util.inner_search('.ff/forcefield.itp', system_topology_list, apply_filter=';')
+    if position is False:
+        new_file_name = os.path.basename(build_files_dict['protein_top'])
+        shutil.copy2(build_files_dict['protein_top'], new_file_name)
+        os_util.local_print('Failed to find a forcefield.itp import in topology file {}. This suggests a problem in '
+                            'topology file formatting. Please, check inputs, especially force field. Copying {} to {}.'
+                            ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'], new_file_name),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+        raise SystemExit(1)
     [system_topology_list.insert(position + 2, each_line) for each_line in ligatoms_list]
-    position = system_topology_list.index('[ system ]\n')
+
+    position = os_util.inner_search('[ system ]', system_topology_list, apply_filter=';')
+    if position is False:
+        new_file_name = os.path.basename(build_files_dict['protein_top'])
+        shutil.copy2(build_files_dict['protein_top'], new_file_name)
+        os_util.local_print('Failed to find a [ system ] directive in topology file {}. This suggests a problem in '
+                            'topology file formatting. Please, check inputs, especially force field. Copying {} to {}.'
+                            ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'], new_file_name),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+        raise SystemExit(1)
     [system_topology_list.insert(position - 1, each_line) for each_line in ligtop_list]
     system_topology_list.append('{:<20} {}\n'.format(ligand_dualmol.dual_topology.molecules[0].name, '1'))
 
@@ -301,34 +321,91 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     # 2.4 Read the name of protein topology files and add to copyfile dict
+    #   This will look for the first occurrence of a #include containing what should be a macromolecule topology, then
+    #   read all subsequent #include lines with the same format, until another directive or including of other
+    #   components (eg, water, ions) are found.
     copyfiles = {}
-    position = system_topology_list.index('; Include chain topologies\n')
-    for each_line in system_topology_list[position + 1:]:
-        if each_line == '\n':
-            break
-        else:
-            line_data = each_line.split()
-            if line_data[0] != '#include':
-                if verbosity >= 0:
-                    os_util.local_print('Unexpected line {} while reading file {}. Please, check files in {}'
-                                        ''.format(each_line, build_files_dict['protein_top'], build_system_dir),
-                                        msg_verbosity=os_util.verbosity_level.warning,
-                                        current_verbosity=verbosity)
+    molname = 'protein_step1_{}'.format(timestamp)
+    search_fn = re.compile(r'#include\s+\"' + molname + r'_[a-zA-Z0-9_-]+\.itp\"')
+    position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
+    if position is False:
+        search_fn = re.compile(r'\s*\[\s+moleculetype\s+]')
+        if os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';') is False:
+            new_file_name = os.path.basename(build_files_dict['protein_top'])
+            shutil.copy2(build_files_dict['protein_top'], new_file_name)
+            os_util.local_print('Failed to find both a #include directive for protein topologies and a '
+                                '[ moleculetype ] directive in the topology file {}. This suggests a problem in '
+                                'topology file formatting. Please, your check inputs. Copying {} to {}'
+                                ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
+                                          new_file_name),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+    else:
+        for each_line in system_topology_list[position:]:
+            if each_line == '\n' or each_line.lstrip().startswith(';'):
+                continue
+            if not search_fn.match(each_line):
                 break
             else:
-                protein_itp = line_data[1].strip('"')
+                protein_itp = re.findall(molname + r'_[a-zA-Z0-9_-]+\.itp', each_line)[0]
                 copyfiles[os.path.join(build_system_dir, protein_itp)] = protein_itp
+        if not copyfiles:
+            if no_checks:
+                os_util.local_print('Failed to parse #include directives for protein topologies in topology file {}. '
+                                    'This should not happen. Because you are running with no_checks, I will try to '
+                                    'go on.'
+                                    ''.format(build_files_dict['protein_top']),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            else:
+                new_file_name = os.path.basename(build_files_dict['protein_top'])
+                shutil.copy2(build_files_dict['protein_top'], new_file_name)
+                os_util.local_print('Failed to parse #include directives for protein topologies in topology file {}. '
+                                    'This suggests a problem in topology file formatting. Please, your check inputs. '
+                                    'Copying {} to {}.'
+                                    ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
+                                              new_file_name),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
 
-    # 2.5 From protein topology files, read position restraints files and add them to copyfile dict
+    # 2.5.2 Tries to find restraint files in the topology (this is the case for a single protein chain)
+    search_fn = re.compile(r'#ifdef POSRES\s')
+    position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
+    if position is not False:
+        for each_line in system_topology_list[position + 1:]:
+            each_line = each_line.lstrip()
+            if each_line.startswith(';'):
+                continue
+            if each_line.startswith('#include'):
+                this_filename = re.findall(r'"\w+.itp"', each_line)
+                try:
+                    this_filename = this_filename[0]
+                except KeyError:
+                    new_file_name = os.path.basename(build_files_dict['protein_top'])
+                    shutil.copy2(build_files_dict['protein_top'], new_file_name)
+                    os_util.local_print('Failed to parse #include directive for restraint file in topology file {}. '
+                                        'This suggests a problem in topology file formatting. Please, your check '
+                                        'inputs. Copying {} to {}.'
+                                        ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
+                                                  new_file_name),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise SystemExit(1)
+                else:
+                    this_filename = this_filename.replace('"', '')
+                    dest_file_name = os.path.join(build_system_dir, this_filename)
+                    shutil.move(this_filename, dest_file_name)
+                    copyfiles[dest_file_name] = this_filename
+            elif each_line.startswith('#endif'):
+                break
+
+    # 2.5.2 From protein topology files, tries to read position restraints files and add them to copyfile dict
     for each_file in copyfiles.copy().values():
         each_file = os.path.join(build_system_dir, each_file)
         this_file_data = os_util.read_file_to_buffer(each_file, die_on_error=True, return_as_list=True,
-                                                     error_message='Failed to read position restraint file '
-                                                                   'when building the system.',
+                                                     error_message='Failed to read topology file when building the '
+                                                                   'system.',
                                                      verbosity=verbosity)
-        try:
-            position = this_file_data.index('#ifdef POSRES\n')
-        except ValueError:
+        position = os_util.inner_search('#ifdef POSRES', this_file_data, apply_filter=';')
+        if position is False:
             os_util.local_print('Protein topology file {} does not have a "#ifdef POSRES" directive. I cannot '
                                 'find the position restraint file, so you will may not be able to use position '
                                 'restraints in this system'.format(each_file),
@@ -394,7 +471,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
 
     # 6. Make index
 
-    # Include an Protein_{Ligand} group in case users does not include one
+    # Include a Protein_{Ligand} group in case users does not include one
     if index_groups is None:
         os_util.local_print('Added a Protein_LIG group to the group index, which will be generated '
                             'automatically', msg_verbosity=os_util.verbosity_level.info,
@@ -2605,6 +2682,20 @@ if __name__ == '__main__':
     if arguments.verbose <= 3:
         pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
 
+    if arguments.perturbations_dir and os.path.exists(arguments.perturbations_dir):
+        if not arguments.no_checks:
+            os_util.local_print('Output directory "{}" exists. Cannot continue. Remove/rename {} or use another '
+                                'perturbation_dir. Alternatively, you can rerun with no_checks, so I will overwrite '
+                                'the output.'
+                                ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+            raise FileExistsError('{} exists'.format(arguments.perturbations_dir))
+        else:
+            os_util.local_print('Output directory {} exists. Because you are running with no_checks, I will OVERWRITE '
+                                '{}!'
+                                ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+
     for each_arg in ['structure']:
         if arguments[each_arg] is None:
             os_util.local_print('Argument "--{}" or config file option "{}" is required. Please see the documentation'
@@ -2938,7 +3029,7 @@ if __name__ == '__main__':
 
     if not arguments.output_hidden_temp_dir:
         tmpdir = all_classes.Namespace({'name': os.getcwd(), 'cleanup': lambda: None})
-        os_util.local_print('Preparing perturbations in {}. This directory will not be removed after the run.'
+        os_util.local_print('Preparing perturbations in {}. This directory will not be removed upon completion.'
                             ''.format(os.path.join(tmpdir.name, original_base_pert_dir)),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
         os_util.makedir(tmpdir.name, verbosity=arguments.verbose)
@@ -3355,10 +3446,18 @@ if __name__ == '__main__':
         try:
             shutil.copytree(base_pert_dir, original_base_pert_dir)
         except FileExistsError:
-            os_util.local_print('Directory {} exists. I cannot write output to an exiting directory.'
-                                .format(original_base_pert_dir),
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-            raise SystemExit(-1)
+            if arguments.output_hidden_temp_dir is not False:
+                if arguments.no_checks:
+                    os_util.local_print('You are running with no_checks, so I am OVERWRITING {}.'
+                                        ''.format(original_base_pert_dir), msg_verbosity=os_util.verbosity_level.error,
+                                        current_verbosity=arguments.verbose)
+                    shutil.rmtree(original_base_pert_dir, ignore_errors=True)
+                    shutil.copytree(base_pert_dir, original_base_pert_dir)
+                else:
+                    os_util.local_print('Directory {} exists. I cannot write output to an exiting directory.'
+                                        ''.format(original_base_pert_dir), msg_verbosity=os_util.verbosity_level.error,
+                                        current_verbosity=arguments.verbose)
+                    raise FileExistsError('{} exists'.format(original_base_pert_dir))
         else:
             os_util.local_print('Input data written to {}'.format(original_base_pert_dir),
                                 msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
