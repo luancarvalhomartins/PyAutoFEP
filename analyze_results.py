@@ -184,10 +184,6 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
         block_array = numpy.concatenate((this_index, numpy.zeros(this_index.shape) + i, this_block[::-1].to_numpy()),
                                         axis=1)
         reversed_data = reversed_data.append(pandas.DataFrame(block_array, columns=columns).set_index(index))
-    print(reversed_data.index.levels[0])
-    print(reversed_data.index.levels[1])
-    import signal
-    os.kill(os.getpid(), signal.SIGINT)
     reversed_data.index = reversed_data.index.set_levels([reversed_data.index.levels[0],
                                                           reversed_data.index.levels[1].astype(int)])
 
