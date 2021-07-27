@@ -119,7 +119,7 @@ def read_options(argument_parser, unpack_section='', user_config_file=None, defa
 
         if not user_file.read(user_config_file):
             os_util.local_print('Failed to read the configuration file {}. I cannot continue without it.'
-                                ''.format(user_file),
+                                ''.format(user_config_file),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
 

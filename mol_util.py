@@ -482,3 +482,55 @@ def adjust_query_properties(query_molecule, generic_atoms=False, ignore_charge=T
     return new_query_molecule
 
 
+def num_explict_hydrogens(mol):
+    """ Return the number of explicit hydrogens in molecular graph
+
+    :param  rdkit.Chem.Mol mol: the input molecule
+    :rtype: int
+    """
+
+    return sum([1 for i in mol.GetAtoms() if i.GetAtomicNum() == 1])
+
+
+def loose_replace_side_chains(mol, core_query, use_chirality=False, verbosity=True):
+    """ Reconstruct a molecule based on common core. First, try to use the regular query. If fails, fallback to
+        generalized bonds then generalized atoms.
+
+    :param rdkit.Chem.Mol mol: the molecule to be modified
+    :param rdkit.Chem.Mol core_query: the molecule to be used as a substructure query for recognizing the core
+    :param bool use_chirality: match the substructure query using chirality
+    :param int verbosity: set verbosity level
+    :rtype: rdkit.Chem.Mol
+    """
+
+    temp_core_structure = rdkit.Chem.Mol(core_query)
+    if num_explict_hydrogens(core_query) > 0 and num_explict_hydrogens(mol) == 0:
+        os_util.local_print('loose_replace_side_chains was called with a mol without explict hydrogens and a '
+                            'core_query with {} explict hydrogens. Removing core_query explict Hs.'
+                            ''.format(num_explict_hydrogens(core_query)),
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        editable_core = rdkit.Chem.EditableMol(core_query)
+        hydrogen_atoms = [each_atom.GetIdx() for each_atom in core_query.GetAtoms() if each_atom.GetAtomicNum() == 1]
+        for idx in sorted(hydrogen_atoms, reverse=True):
+            editable_core.RemoveAtom(idx)
+        temp_core_structure = editable_core.GetMol()
+        rdkit.Chem.SanitizeMol(temp_core_structure, catchErrors=True)
+
+    result_core_structure = rdkit.Chem.ReplaceSidechains(mol, temp_core_structure, useChirality=use_chirality)
+    if result_core_structure is None:
+        os_util.local_print('rdkit.Chem.ReplaceSidechains failed with mol={} (SMILES="{}") and coreQuery={} '
+                            '(SMARTS="{}"). Retrying with adjust_query_properties.'
+                            ''.format(mol, rdkit.Chem.MolToSmiles(mol), temp_core_structure,
+                                      rdkit.Chem.MolToSmarts(temp_core_structure)),
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        temp_core_mol = adjust_query_properties(temp_core_structure, verbosity=verbosity)
+        result_core_structure = rdkit.Chem.ReplaceSidechains(mol, temp_core_mol, useChirality=use_chirality)
+        if result_core_structure is None:
+            os_util.local_print('rdkit.Chem.ReplaceSidechains failed with mol={} (SMILES="{}") and coreQuery={} '
+                                '(SMARTS="{}"). Retrying with adjust_query_properties setting generic_atoms=True.'
+                                ''.format(mol, rdkit.Chem.MolToSmiles(mol), temp_core_structure,
+                                          rdkit.Chem.MolToSmarts(temp_core_structure)),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+            temp_core_mol = adjust_query_properties(temp_core_structure, generic_atoms=True, verbosity=verbosity)
+            temp_core_structure = rdkit.Chem.ReplaceSidechains(mol, temp_core_mol, useChirality=use_chirality)
+    return result_core_structure

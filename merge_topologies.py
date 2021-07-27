@@ -186,18 +186,15 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                           rdkit.Chem.MolToSmiles(core_mol)),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
-        core_mol = mol_util.adjust_query_properties(core_mol, verbosity=verbosity)
-
-        # Reconstruct a molecule based on common core
-        temp_core_structure = rdkit.Chem.ReplaceSidechains(target, core_mol, useChirality=True)
+        temp_core_structure = mol_util.loose_replace_side_chains(target, core_mol, use_chirality=True)
         if temp_core_structure is None:
             try:
                 target_name = target.GetProp('_Name')
             except KeyError:
                 target_name = target.__str__()
             os_util.local_print('Could not process the core structure to embed while working with the molecule '
-                                '{} (SMILES={}).\n\trdkit.Chem.ReplaceSideChains(target, core_mol) failed.\n\t'
-                                'core_mol: {} (SMARTS={})\n\ttarget: {} (SMARTS={})'
+                                '{} (SMILES={}). mol_util.loose_replace_side_chains(target, core_mol) failed. '
+                                'core_mol: {} (SMARTS={}) target: {} (SMARTS={})'
                                 ''.format(molecule.GetProp('_Name'),
                                           rdkit.Chem.MolToSmiles(molecule), core_mol,
                                           rdkit.Chem.MolToSmarts(core_mol),
@@ -592,24 +589,20 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
 
-    core_structure = mol_util.adjust_query_properties(core_structure, verbosity=verbosity)
     # Reconstruct a molecule based on common core and coordinates from molecule1
-    core_structure = rdkit.Chem.ReplaceSidechains(molecule1, core_structure, useChirality=True)
-    if core_structure is None:
-        os_util.local_print('Could strip side chains between {} (SMILES={}) and core structure (SMILES={})'
-                            ''.format(molecule1.GetProp('_Name'), rdkit.Chem.MolToSmiles(molecule1),
-                                      rdkit.Chem.MolToSmiles(core_structure)),
+    temp_core_structure = mol_util.loose_replace_side_chains(molecule1, core_structure, use_chirality=True)
+    if temp_core_structure is None:
+        os_util.local_print('Could not process the core structure to embed while working with the molecule '
+                            '{} (SMILES={}). mol_util.loose_replace_side_chains(target, core_mol) failed. '
+                            'core_query: {} (SMARTS={})'
+                            ''.format(molecule1, rdkit.Chem.MolToSmiles(molecule1), core_structure,
+                                      rdkit.Chem.MolToSmarts(core_structure)),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        os_util.local_print('Error when running rdkit.Chem.ReplaceSidechains(molecule1, core_structure)'
-                            ''.format(commom_core_smiles),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-        os_util.local_print('This is the commom core between topologies: {}'.format(commom_core_smiles),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-        os_util.local_print('This is the original molecule: {}'.format(rdkit.Chem.MolToSmiles(molecule1)),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
         raise SystemExit(1)
+    else:
+        core_structure = temp_core_structure
 
-    # Remove * atoms from commom core. Note: if there are more than 10 substitution point, this will fail.
+    # Remove * atoms from common core. Note: if there are more than 10 substitution points, this will fail.
     core_structure = DeleteSubstructs(core_structure, rdkit.Chem.MolFromSmarts('[1,2,3,4,5,6,7,8,9#0]'))
     if core_structure == '':
         os_util.local_print('Could not detect/convert common core between topologies',
@@ -624,7 +617,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
     os_util.local_print('This is the common core structure: {}'.format(core_structure),
                         msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
-    # Get the list of matching atoms from common_atoms -> molecule1 and common_atoms -> molecule2, then maps to
+    # Get the list of matching atoms from common_atoms -> molecule1 and common_atoms -> molecule2, then map to
     # into molecule1 -> molecule2
     core_structure = mol_util.adjust_query_properties(core_structure, verbosity=verbosity)
     common_atoms = list(zip(molecule1.GetSubstructMatch(core_structure), molecule2.GetSubstructMatch(core_structure)))

@@ -444,8 +444,16 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     solvate_list = ['solvate', '-cp', build_files_dict['system_gro'], '-cs', solvent_box,
                     '-o', build_files_dict['systemsolv_gro'], '-p', build_files_dict['systemsolv_top']]
     os_util.run_gmx(gmx_bin, solvate_list, '', build_files_dict['solvate_log'],
-                    verbosity=verbosity,
-                    alt_environment={'GMX_MAXBACKUP': '-1'})
+                    verbosity=verbosity, alt_environment={'GMX_MAXBACKUP': '-1'})
+
+    # Some users experienced a problem during the gmx grompp step below, apparently filesystem-related, which could be
+    # due to a delay in the editing of build_files_dict['systemsolv_top'] by gmx solvate subprocess. The os.sync() may
+    # fix this by forcing the file to be written to disk.
+    try:
+        os.sync()
+    except AttributeError:
+        os_util.local_print('os.sync() not found. Is this a non-Unix system or Python version < 3.3?',
+                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
     # 5. Add ions to system
     # 5.1. Prepare a dummy mdp to run genion
@@ -1487,9 +1495,9 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                 return return_data
 
 
-def generate_water_perturbation(dual_molecule_ligand, water_dir, topology_file, protein_topology_files,
-                                solvate_data=None, protein_dir=None, gmx_bin='gmx', ligand_name='LIG',
-                                gmx_maxwarn=1, verbosity=0, **kwargs):
+def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein_topology_files,
+                         solvate_data=None, protein_dir=None, gmx_bin='gmx', ligand_name='LIG',
+                         gmx_maxwarn=1, verbosity=0, **kwargs):
     """ Prepares a system consisting in a dual-topology molecule solvated and with counter ions added
 
     :param merge_topologies.MergedTopology dual_molecule_ligand: pseudo-molecule to be solvated
@@ -1601,6 +1609,13 @@ def generate_water_perturbation(dual_molecule_ligand, water_dir, topology_file, 
                     '-o', build_files_dict['ligandsolv_pdb'], '-p', build_files_dict['ligandsolv_top']]
     os_util.run_gmx(gmx_bin, solvate_list, '', build_files_dict['solvate_log'], verbosity=verbosity,
                     alt_environment={'GMX_MAXBACKUP': '-1'})
+
+    # See the same the comment in prepare_complex_system
+    try:
+        os.sync()
+    except AttributeError:
+        os_util.local_print('os.sync() not found. Is this a non-Unix system or Python version < 3.3?',
+                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
     # Prepare a dummy mdp to run genion
     with open(build_files_dict['genion_mdp'], 'w') as genion_fh:
@@ -2703,21 +2718,24 @@ if __name__ == '__main__':
                                 current_verbosity=arguments.verbose)
             raise SystemExit(1)
 
+    arguments.mcs_custom_mcs = os_util.detect_type(arguments.mcs_custom_mcs, test_for_list=True)
     if arguments.mcs_custom_mcs is None:
         custom_mcs_data = None
     elif isinstance(arguments.mcs_custom_mcs, str):
         custom_mcs_data = arguments.mcs_custom_mcs
     elif isinstance(arguments.mcs_custom_mcs, list):
-        if len(arguments.mcs_custom_mcs) % 3 != 0:
+        n_elements = len(arguments.mcs_custom_mcs)
+        if n_elements % 3 == 0:
             from numpy import arange
 
             custom_mcs_data = {}
-            for (i1, i2, j) in [arange(3 * i, 3 * i + 3) for i in range(len(arguments.mcs_custom_mcs))]:
-                key = frozenset([arguments.mcs_custom_mcs[i1], arguments.mcs_custom_mcs[i2]])
-                custom_mcs_data[key] = arguments.mcs_custom_mcs[j]
+            for (mol_name_1, mol_name_2, mcs_smarts) in [arange(3 * i, 3 * i + 3)
+                                                         for i in range(int(n_elements / 3))]:
+                key = frozenset([arguments.mcs_custom_mcs[mol_name_1], arguments.mcs_custom_mcs[mol_name_2]])
+                custom_mcs_data[key] = arguments.mcs_custom_mcs[mcs_smarts]
         else:
             os_util.local_print('Error while processing mcs_custom_mcs argument or option. If a list in supplied to '
-                                'mcs_custom_mcs, it must have 3n elements, formatted as "mol1_name, mol2_name, mcs_a,'
+                                'mcs_custom_mcs, it must have 3n elements, formatted as "mol1_name, mol2_name, mcs_a, '
                                 'mol3_name, mol4_name, mcs_b". Please, see the manual. Data read from mcs_custom_mcs '
                                 'was {}'.format(arguments.mcs_custom_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
@@ -2933,12 +2951,14 @@ if __name__ == '__main__':
     else:
         arguments.poses_advanced_options = {}
 
-    # Reads poses data
+    # Reads poses data. If a custom MCS was supplied as str (ie, all MCS should custom), use it during pose loading.
+    # Otherwise, user wants only specific pairs (of ligands) to use a custom MCS, so use find_mcs during pose loading.
+    poses_mcs = custom_mcs_data if isinstance(custom_mcs_data, str) else None
     poses_mol_data = align_ligands(receptor_structure_mol, poses_input,
                                    poses_reference_structure=arguments.poses_reference_structure,
                                    reference_pose_superimpose=arguments.poses_reference_pose_superimpose,
                                    superimpose_loader_ligands=ligands_dict,
-                                   pose_loader=arguments.pose_loader, mcs=custom_mcs_data, save_state=progress_data,
+                                   pose_loader=arguments.pose_loader, mcs=poses_mcs, save_state=progress_data,
                                    verbosity=arguments.verbose, **arguments.poses_advanced_options)
 
     if not poses_mol_data:
@@ -3106,8 +3126,11 @@ if __name__ == '__main__':
             this_custom_mcs = None
         elif isinstance(custom_mcs_data, str):
             this_custom_mcs = custom_mcs_data
-        elif isinstance(custom_mcs_data, dict) and frozenset([state_a_name, state_b_name]) in custom_mcs_data:
-            this_custom_mcs = custom_mcs_data[frozenset([state_a_name, state_b_name])]
+        elif isinstance(custom_mcs_data, dict):
+            if frozenset([state_a_name, state_b_name]) in custom_mcs_data:
+                this_custom_mcs = custom_mcs_data[frozenset([state_a_name, state_b_name])]
+            else:
+                this_custom_mcs = None
         else:
             os_util.local_print("Could not understand custom_mcs_data, read from mcs_custom_mcs option. Please, check "
                                 'your input. mcs_custom_mcs is "{}"'.format(arguments.mcs_custom_mcs),
@@ -3136,7 +3159,7 @@ if __name__ == '__main__':
             if arguments.solute_scaling != -1:
                 this_solute_scaling_list = solute_scaling_list
 
-        # Then embed it to initial pose
+        # Then embed it to the reference pose
         merged_data = merge_topologies.constrained_embed_dualmol(merged_data,
                                                                  rdkit.Chem.RemoveHs(poses_mol_data[state_a_name]),
                                                                  mcs=this_custom_mcs, verbosity=arguments.verbose,
@@ -3219,13 +3242,13 @@ if __name__ == '__main__':
                         'box_type': arguments.buildsys_boxtype}
 
         # Prepare water perturbations (this is irrespective of whether user used a pre-solvated system or not)
-        water_data = generate_water_perturbation(dual_molecule_ligand=merged_data,
-                                                 water_dir=os.path.join(base_pert_dir, morph_dir, 'water'),
-                                                 topology_file=arguments.topology,
-                                                 solvate_data=solvate_data,
-                                                 protein_topology_files=protein_topology_files,
-                                                 gmx_maxwarn=arguments.gmx_maxwarn, gmx_bin=arguments.gmx_bin_local,
-                                                 verbosity=arguments.verbose)
+        water_data = prepare_water_system(dual_molecule_ligand=merged_data,
+                                          water_dir=os.path.join(base_pert_dir, morph_dir, 'water'),
+                                          topology_file=arguments.topology,
+                                          solvate_data=solvate_data,
+                                          protein_topology_files=protein_topology_files,
+                                          gmx_maxwarn=arguments.gmx_maxwarn, gmx_bin=arguments.gmx_bin_local,
+                                          verbosity=arguments.verbose)
 
         # Create lambda dirs
         for each_system, each_mdplist in mdp_data.items():
@@ -3351,7 +3374,6 @@ if __name__ == '__main__':
 
             # This will be the output script
             this_runall_script = os.path.join(this_basedir, '..', 'runall_{}_{}.sh'.format(morph_dir, each_system))
-            relbasedir = os.path.relpath(this_basedir, os.path.join(base_pert_dir, morph_dir))
 
             run_command = output_data['constantpart']['run']
             substitution = {'__MDDIR__': os.path.join(morph_dir, each_system, 'md')}
