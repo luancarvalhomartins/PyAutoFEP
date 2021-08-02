@@ -24,7 +24,6 @@ import os
 import re
 from copy import deepcopy
 import time
-from os.path import splitext, basename
 from collections.abc import Callable
 
 import rdkit.Chem
@@ -141,7 +140,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
     :param str mcs: use this SMARTS as common core to merge molecules
     :param savestate_util.SavableState save_state: saved state data
     :param int verbosity: set verbosity level
-    :rtype: MergedTopologies
+    :rtype: rdkit.Chem.Mol
     """
 
     os_util.local_print('Entering constrained_embed_dualmol: pseudomolecule={}, target={}, core_conf_id={}, '
@@ -176,6 +175,25 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                 ''.format(molecule.GetProp("_Name"), this_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
+
+        if core_mol.GetNumHeavyAtoms() == molecule.GetNumHeavyAtoms():
+            try:
+                target_name = target.GetProp('_Name')
+            except KeyError:
+                target_name = str(target)
+            os_util.local_print('The detected or supplied core between molecules {} (SMILES="{}") and {} (SMILES="{}") '
+                                'has the same number of heavy atoms as molecule {} ({} heavy atoms). Falling back to '
+                                'constrained_embed_forcefield with num_conformations=1.'
+                                ''.format(molecule.GetProp("_Name"), rdkit.Chem.MolToSmiles(molecule), target_name,
+                                          rdkit.Chem.MolToSmiles(target), molecule.GetProp("_Name"),
+                                          molecule.GetNumHeavyAtoms()),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
+            atom_map = list(zip(get_substruct_matches_fallback(molecule, core_mol)[0],
+                                get_substruct_matches_fallback(target, core_mol)[0]))
+            constrained_embed_forcefield(molecule, target, core_conf_id=core_conf_id, randomseed=randomseed,
+                                         atom_map=atom_map, num_conformations=1, **kwargs)
+            return molecule
 
         sanitize_return = rdkit.Chem.SanitizeMol(core_mol, catchErrors=True)
         if sanitize_return != 0:
@@ -512,7 +530,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise ValueError('molecules names are equal')
 
-        defaults_pattern = re.compile(r'(?:\[\s+)defaults(?:\s+\]).*')
+        defaults_pattern = re.compile(r'(?:\[\s+)defaults(?:\s+]).*')
 
         for (each_molecule, each_topology, each_top_file) in \
                 [[molecule1, topology1, file_topology1],

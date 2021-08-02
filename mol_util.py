@@ -532,5 +532,6 @@ def loose_replace_side_chains(mol, core_query, use_chirality=False, verbosity=Tr
                                           rdkit.Chem.MolToSmarts(temp_core_structure)),
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             temp_core_mol = adjust_query_properties(temp_core_structure, generic_atoms=True, verbosity=verbosity)
-            temp_core_structure = rdkit.Chem.ReplaceSidechains(mol, temp_core_mol, useChirality=use_chirality)
+            result_core_structure = rdkit.Chem.ReplaceSidechains(mol, temp_core_mol, useChirality=use_chirality)
+
     return result_core_structure

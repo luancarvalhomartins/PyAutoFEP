@@ -163,7 +163,7 @@ def read_options(argument_parser, unpack_section='', user_config_file=None, defa
             result_data.threads = cpu_count()
         else:
             result_data.threads = len(sched_getaffinity(0))
-    if type(result_data.threads) != int or result_data.threads < 0:
+    if type(result_data.threads) != int or result_data.threads < -1 or result_data.threads == 0:
         os_util.local_print('Invalid number of threads supplied or detected. Falling back to threads = 1',
                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
         result_data.threads = 1
