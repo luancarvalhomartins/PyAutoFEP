@@ -31,6 +31,47 @@ from shutil import copy2, copytree, rmtree
 
 class SavableState(Namespace):
     """ A class which also behaves like a dict and can load and save to pickle
+
+    Data structure = {
+        mcs_dict: {
+            frozenset([smiles_a, smiles_b]): mcs,
+        },
+        ligand_data: {
+            molecule_name: {
+                'molecule': rdkit.Chem.Mol,
+                'topology': [top_file_a, top_file_b],          # GROMACS-compatible topology files
+                'image': {
+                    '2d_hs': str                               # SVG data of 2D depiction with Hs
+                    '2d_nohs': str                             # SVG data of 2D depiction without Hs
+                    'perturbations': {
+                        molecule_b_name: {
+                            common_core_smarts: {
+                                '2d_hs': svg_data_hs,          # 2D SVG, with Hs, aligned to core, atoms highlighted
+                                '2d_nohs': svg_data_nohs       # 2D SVG, no Hs, aligned to core, atoms highlighted
+                            }
+                        }
+                    }
+                }
+            },
+        },
+        'superimpose_data': {
+            'reference_pose_path': path_to_ref_pose_file,
+            'ligand_dict': {
+                molecule_name: rdkit.Chem.Mol,                 # Molecule aligned to path_to_ref_pose_file
+            }
+        },
+        'thermograph': {
+            'run_%d%m%Y_%H%M%S': {
+                'runtype': runtype,                            # One of: ['optimal', 'star', 'wheel']
+                'bias': molecule_name                          # Map was biased towards a molecule, if any
+                'input_molecules': {
+                    molecule_name: { 'molecule': rdkit.Chem.Mol }
+                }
+                'best_solution': networkx.Graph                # Graph of the best solution found
+                'optimization_data': all_classes.AntSolver     # Containing data of every optimization step
+            }
+        }
+    }
     """
 
     def __init__(self, input_file='', verbosity=0):

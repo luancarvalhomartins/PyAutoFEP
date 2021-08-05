@@ -1,5 +1,6 @@
 #! /usr/bin/env python3
 #
+import csv
 
 import matplotlib
 
@@ -600,8 +601,13 @@ def plot_ddg_vs_time(forward_ddgs, reverse_ddgs, forward_ddg_errors, reverse_ddg
     # The input time units in ps, lets convert it time_units
     if not isinstance(forward_timestep, list):
         forward_timestep = forward_timestep * formatted_time_units[time_units].mult
+    else:
+        forward_timestep = [i * formatted_time_units[time_units].mult for i in forward_timestep]
+
     if not isinstance(reverse_timestep, list):
         reverse_timestep = reverse_timestep * formatted_time_units[time_units].mult
+    else:
+        reverse_timestep = [i * formatted_time_units[time_units].mult for i in reverse_timestep]
 
     fig, ax = pl.subplots(figsize=(5, 4))
     ax.xaxis.set_ticks_position('bottom')
@@ -865,7 +871,7 @@ def analyze_perturbation(perturbation_name=None, perturbation_data=None, gromacs
             set(perturbation_data['u_nk_data']).issuperset({'converted_table', 'column_names', 'indexes'})):
         os_util.local_print('Could not parse data from file {}. Please, check the input file integrity. I read the '
                             'following data: {}'
-                            ''.format(perturbation_name, ', '.join(perturbation_data['u_nk_data'].keys())),
+                            ''.format(perturbation_name, ', '.join(perturbation_data.keys())),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
 
@@ -1181,10 +1187,7 @@ def get_data_from_unk_pkl(input_pkl, read_from_xvg='auto', verbosity=0):
         try:
             perturbation_data = pickle.load(fh)
         except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError):
-            if read_from_xvg == 'auto':
-                collect_from_xvg(os.path.dirname(input_pkl), unk_file=os.path.basename(input_pkl), verbosity=0)
-                perturbation_data = None
-            else:
+            if read_from_xvg != 'auto':
                 os_util.local_print('Failed to read input file {}. Estimates and analysis for this system will not '
                                     'be run.'.format(input_pkl),
                                     msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
@@ -1194,10 +1197,7 @@ def get_data_from_unk_pkl(input_pkl, read_from_xvg='auto', verbosity=0):
             with open(input_pkl, 'rb') as fh2:
                 op, proto_ver, snd = next(genops(fh2))
             if op.name != 'PROTO':
-                if read_from_xvg == 'auto':
-                    collect_from_xvg(os.path.dirname(input_pkl), unk_file=os.path.basename(input_pkl), verbosity=0)
-                    perturbation_data = None
-                else:
+                if read_from_xvg != 'auto':
                     os_util.local_print('Could not validate {} file pickle version. In case of failure during file '
                                         'reading, make sure pickle version is recent enough in respect to the '
                                         'pickle version in the run node or run again with read_from_xvg=auto or always.'
@@ -1206,10 +1206,7 @@ def get_data_from_unk_pkl(input_pkl, read_from_xvg='auto', verbosity=0):
                     return None
             else:
                 if pickle.HIGHEST_PROTOCOL < proto_ver:
-                    if read_from_xvg == 'auto':
-                        collect_from_xvg(os.path.dirname(input_pkl), unk_file=os.path.basename(input_pkl), verbosity=0)
-                        perturbation_data = None
-                    else:
+                    if read_from_xvg != 'auto':
                         os_util.local_print('Pickle protocol {} was used to create file {}, while current '
                                             'maximum supported protocol is {}. Please, update your environment or run '
                                             'again with read_from_xvg=auto or always. Estimates and analysis for this '
@@ -1218,20 +1215,33 @@ def get_data_from_unk_pkl(input_pkl, read_from_xvg='auto', verbosity=0):
                                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                         return None
                 else:
-                    return perturbation_data
+                    # Check for required fields on read data (do not check for temperature, as the user can select it
+                    # using input)
+                    if not ('u_nk_data' in perturbation_data and
+                            set(perturbation_data['u_nk_data']).issuperset({'converted_table',
+                                                                            'column_names', 'indexes'})):
+                        if read_from_xvg != 'auto':
+                            os_util.local_print('Unexpected data structure in file {}. The fields read were {}.'
+                                                ' Estimates and analysis for this  system will not be run.'
+                                                ''.format(input_pkl, perturbation_data.keys()),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                            return None
+                    else:
+                        return perturbation_data
 
-    if perturbation_data is None:
-        with open(input_pkl, 'rb') as fh:
-            try:
-                perturbation_data = pickle.load(fh)
-            except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError):
-                os_util.local_print('Failed to read {} file and failed to recreate it by collecting data from xvg '
-                                    'files. Estimates and analysis for this system will not be run.'
-                                    ''.format(input_pkl),
-                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-                return None
-            else:
-                return perturbation_data
+    collect_from_xvg(os.path.dirname(input_pkl), unk_file=os.path.basename(input_pkl), verbosity=0)
+    with open(input_pkl, 'rb') as fh:
+        try:
+            perturbation_data = pickle.load(fh)
+        except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError):
+            os_util.local_print('Failed to read {} file and failed to recreate it by collecting data from xvg '
+                                'files. Estimates and analysis for this system will not be run.'
+                                ''.format(input_pkl),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            return None
+        else:
+            return perturbation_data
 
 
 def dummy_hysteresis(g0):
@@ -1293,11 +1303,10 @@ if __name__ == '__main__':
                              help='Save plots to this directory (Default: save to PWD, or '
                                   'to output_uncompress_directory, if used, or to the input data dir, if a dir is '
                                   'used)')
-    # TODO: save pertubation data to a text file
-    # output_args.add_argument('--output_perturbations_data', default=None, type=str,
-    #                          help='Save free energy data of each perturbation to this file')
+    output_args.add_argument('--output_pairwise_ddg', default=None, type=str,
+                             help='Save pairwise \u0394\u0394G data to this file')
     output_args.add_argument('--output_ddg_to_center', default=None, type=str,
-                             help='Save \u0394\u0394G to center molecule (center_molecule)')
+                             help='Save \u0394\u0394G to center molecule (center_molecule) to this file')
 
     process_user_input.add_argparse_global_args(Parser)
     arguments = process_user_input.read_options(Parser, unpack_section='analyze_results')
@@ -1387,7 +1396,7 @@ if __name__ == '__main__':
 
     # Try to find files in extracted dir
     found_systems = []
-    pertubations_unk_data = {}
+    perturbations_unk_data = {}
     saved_data = {}
 
     os_util.local_print('Searching a progress file in {}'.format(data_dir),
@@ -1443,7 +1452,7 @@ if __name__ == '__main__':
                                  verbosity=arguments.verbose)
 
             if os.path.isfile(pkl_file):
-                pertubations_unk_data.setdefault(each_entry, {}).__setitem__(system, {'pkl': pkl_file})
+                perturbations_unk_data.setdefault(each_entry, {}).__setitem__(system, {'pkl': pkl_file})
                 if system not in found_systems:
                     found_systems.append(system)
             else:
@@ -1452,7 +1461,7 @@ if __name__ == '__main__':
                                      unk_file='unk_matrix.pkl', temperature=arguments.temperature,
                                      verbosity=arguments.verbose)
                     new_pkl_file = os.path.join(data_dir, each_entry, system, 'md', 'rerun', 'unk_matrix.pkl')
-                    pertubations_unk_data.setdefault(each_entry, {}).__setitem__(system, {'pkl': new_pkl_file})
+                    perturbations_unk_data.setdefault(each_entry, {}).__setitem__(system, {'pkl': new_pkl_file})
                 else:
                     os_util.local_print('Could not find result pkl file for {} run {}. Estimates and analysis for this '
                                         'system will not be run.',
@@ -1463,7 +1472,7 @@ if __name__ == '__main__':
             log_file = os.path.join(data_dir, each_entry, system, 'md', 'lambda0', 'lambda.log')
             if os.path.isfile(log_file):
                 try:
-                    pertubations_unk_data[each_entry][system]['log'] = log_file
+                    perturbations_unk_data[each_entry][system]['log'] = log_file
                 except KeyError:
                     os_util.local_print('A log file for {} run {} was found, but no result pkl file was found. No '
                                         'analysis will be performed.',
@@ -1556,7 +1565,7 @@ if __name__ == '__main__':
                             current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.error)
         raise SystemExit(-1)
 
-    # Sets and create the output dir
+    # Set and create the output dir
     output_directory = os.getcwd()
     if arguments.output_plot_directory is not None:
         output_directory = arguments.output_plot_directory
@@ -1565,7 +1574,7 @@ if __name__ == '__main__':
     os_util.makedir(output_directory, verbosity=arguments.verbose)
 
     arguments_data_holder = OrderedDict()
-    for each_perturbation, each_data in pertubations_unk_data.items():
+    for each_perturbation, each_data in perturbations_unk_data.items():
         key = [(mol_i, mol_j) for (mol_i, mol_j) in saved_data['perturbation_map'].edges
                if '{}-{}'.format(mol_i, mol_j) == each_perturbation]
         if not key:
@@ -1625,6 +1634,9 @@ if __name__ == '__main__':
     for (key, system), ddg_data in zip(arguments_data_holder.keys(), ddg_data_result):
         saved_data['perturbation_map'].edges[key][system] = ddg_data
 
+    pairwise_ddg = [['pair', '{}_ddg'.format(found_systems[0]), '{}_err'.format(found_systems[0]),
+                     '{}_ddg'.format(found_systems[1]), '{}_err'.format(found_systems[1]),
+                     'total_ddg', 'total_err']]
     for key in set([key for key, system in arguments_data_holder.keys()]):
         each_perturbation = '{}\u2192{}'.format(*key)
 
@@ -1661,15 +1673,21 @@ if __name__ == '__main__':
                                                           formatted_energy_units[arguments.units].text)
                 value2 = '{:0.1f}\u00B1{:0.1f} {}'.format(system_b['ddg'] / beta, system_b['error'] / beta,
                                                           formatted_energy_units[arguments.units].text)
-                value3 = '\u0394\u0394G = {:0.1f} {}'.format((system_a['ddg'] - system_b['ddg']) / beta,
-                                                             formatted_energy_units[arguments.units].text)
+
+                this_edge['final_ddg'] = (system_a['ddg'] - system_b['ddg']) / beta
+                # Estimate of the error of the sum: \delta(a+b) = \sqrt{(\delta a)^2 + (\delta b)^2}
+                this_edge['final_d_ddg'] = numpy.sqrt(system_a['error'] * system_b['error']) / beta
+                value3 = '\u0394\u0394G = {:0.1f}\u00B1{:0.1f} {}'.format(this_edge['final_ddg'],
+                                                                          this_edge['final_d_ddg'],
+                                                                          formatted_energy_units[arguments.units].text)
 
                 os_util.local_print('{:^25} {:^20} {:^20} {:^20}'
                                     ''.format(each_perturbation, value1, value2, value3),
                                     current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.default)
-                this_edge['final_ddg'] = (system_a['ddg'] - system_b['ddg']) / beta
-                this_edge['final_d_ddg'] = (system_a['error'] / system_a['ddg']
-                                            + system_b['error'] / system_b['ddg']) / beta
+
+                pairwise_ddg.append([each_perturbation, system_a['ddg'] / beta, system_a['error'] / beta,
+                                     system_b['ddg'] / beta, system_b['error'] / beta, this_edge['final_ddg'],
+                                     this_edge['final_d_ddg']])
             else:
                 os_util.local_print('Temperature or units are not the same for {} and {} systems of perturbation {}. I '
                                     'will not be able to combine their \u0394\u0394G values. Make sure this is what '
@@ -1691,7 +1709,8 @@ if __name__ == '__main__':
                                     current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.default)
                 this_edge['final_ddg'] = None
                 this_edge['final_d_ddg'] = None
-
+                pairwise_ddg.append([each_perturbation, system_a['ddg'], system_a['error'], system_b['ddg'],
+                                     system_b['error'], '-', '-'])
         else:
             os_util.local_print('{:^25} {:^20} {:^20}'.format(each_perturbation, "Done", "Done"),
                                 current_verbosity=arguments.verbose,
@@ -1726,3 +1745,10 @@ if __name__ == '__main__':
                                      'ddg': list(ddg_to_center.values()),
                                      'error': [0.0] * len(ddg_to_center)}).set_index('Name')
         csv_data.to_csv(os.path.join(output_directory, arguments.output_ddg_to_center))
+
+    if arguments.output_pairwise_ddg is not False:
+        if arguments.output_ddg_to_center is None:
+            arguments.output_ddg_to_center = 'pairwise_ddg.csv'
+        with open(os.path.join(output_directory, arguments.output_ddg_to_center), 'w', newline='') as fh:
+            csv_handler = csv.writer(fh)
+            csv_handler.writerows(pairwise_ddg)
