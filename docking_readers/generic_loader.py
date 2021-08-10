@@ -88,7 +88,7 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
             import pybel
 
-            if verbosity <= 3:
+            if verbosity < os_util.verbosity_level.debug:
                 pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
             try:
                 if type(each_mol) == str:
@@ -110,7 +110,6 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
             else:
                 # Convert and convert back to apply mol_util.process_dummy_atoms
                 docking_mol_rd = mol_util.process_dummy_atoms(mol_util.obmol_to_rwmol(docking_mol_ob))
-                #docking_mol_local[each_name] = mol_util.rwmol_to_obmol(docking_mol_rd)
                 docking_mol_local[each_name] = docking_mol_rd
 
                 os_util.local_print('{:<15} {:<18}'
@@ -188,8 +187,8 @@ def generic_mol_read(ligand_format, ligand_data, verbosity=0):
         if docking_mol_rd is None:
             docking_mol_rd = rdkit.Chem.MolFromMolFile(ligand_data, removeHs=False)
     elif ligand_format in ['pdbqt', '.pdbqt', 'pdb', '.pdb']:
-        os_util.local_print('You are reading a pdbqt file, which requires openbabel. You may prefer converting '
-                            'it to a mol2 before hand. This may be unsafe.',
+        os_util.local_print('You are reading a pdb or pdbqt file ({}), which requires openbabel. Should this fail, you '
+                            'may try converting it to a mol2 before hand. This may be unsafe.'.format(ligand_data),
                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
         import pybel
         try:

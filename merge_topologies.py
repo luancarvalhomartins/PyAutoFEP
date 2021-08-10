@@ -96,6 +96,12 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
         # align the embedded conformation onto the core:
         rdkit.Chem.AllChem.AlignMol(molecule, core, refCid=core_conf_id, prbCid=this_conf_id, atomMap=atom_map,
                                     maxIters=kwargs['maxIters'])
+        sanitize_return = rdkit.Chem.SanitizeMol(molecule, catchErrors=True)
+        if sanitize_return != 0:
+            os_util.local_print('Could not sanitize molecule {} (SMILES="{}")\nError {} when running '
+                                'rdkit.Chem.SanitizeMol.'
+                                ''.format(molecule.GetProp("_Name"), rdkit.Chem.MolToSmiles(molecule), sanitize_return),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
         ff = force_field(molecule, confId=this_conf_id)
         conf = core.GetConformer(core_conf_id)
 
