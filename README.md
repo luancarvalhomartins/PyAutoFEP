@@ -13,7 +13,7 @@ provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in 
 - Python 3.6+
 - [rdkit](https://www.rdkit.org/) 2019.03+
 - [networkx](https://networkx.org) 2.X (1.X versions are not supported)
-- [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3 & [pymbar](https://github.com/choderalab/pymbar) 3.0.4
+- [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3.0 & [pymbar](https://github.com/choderalab/pymbar) 3.0.3 (Because of https://github.com/choderalab/pymbar/issues/419)
 - [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*. openbabel 3.X is not currently not supported, but eventually will)
 - matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation_map.py*)
 - numpy (required only in *analyze_results.py*)
@@ -44,7 +44,7 @@ conda install -c openbabel openbabel # ver 3.X is not supported, make sure to in
 conda install matplotlib networkx pip
 
 # Use pip to install pymbar and alchemlyb
-pip install pymbar alchemlyb
+pip install pymbar==3.0.3 alchemlyb==0.3.0 # Later versions are discouraged
 ```
 
 ## Documentation
