@@ -68,7 +68,7 @@ def process_xvg_to_dict(input_files, temperature=298.15):
     for i in range(len(potential_table)):
         time_count = max(time_count, len(potential_table[0][i]))
 
-    struct_count = len(potential_table[0])
+    struct_count = max([len(i) for i in potential_table.values()])
     converted_table = [[float('inf')] * (len(potential_table) + 2) for _ in range(struct_count * time_count)]
 
     # Reorganize dictionary in list of lists
@@ -81,11 +81,9 @@ def process_xvg_to_dict(input_files, temperature=298.15):
                     converted_table[index_coord * time_count + index_time][index_struct + 2] = \
                         time_potential[1] + pv_table[index_struct][time_potential[0]]
                 except IndexError as error:
-                    print('[ERROR] index_coord: {}; time_count: {}; index_time: {}'.format(index_coord,
-                                                                                           time_count, index_time))
-                    print('index: ' + str(index_coord * time_count + index_time))
-                    print(error)
-                    raise SystemExit(1)
+                    print('[ERROR] index_coord: {}; time_count: {}; index_time: {}; index: {}'
+                          ''.format(index_coord, time_count, index_time, str(index_coord * time_count + index_time)))
+                    print('[ERROR] Error message is: {}'.format(error))
 
     # Prepare indexes and column names
     indexes = ['time', 'fep-lambda']

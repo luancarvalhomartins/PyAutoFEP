@@ -1311,6 +1311,22 @@ if __name__ == '__main__':
     process_user_input.add_argparse_global_args(Parser)
     arguments = process_user_input.read_options(Parser, unpack_section='analyze_results')
 
+    # TODO: when pymbar bug #419 is fixed, add a check here to support newer versions
+    from pymbar.version import full_version as pymbar_version
+    from distutils.version import LooseVersion
+    if LooseVersion(pymbar_version) != LooseVersion('3.0.3'):
+        if arguments.no_checks:
+            os_util.local_print('pymbar version detected is {}, while the recommended version is == 3.0.3. Because you '
+                                'are running with no_checks, I will go on. Please be aware of pymbar bug #419 '
+                                '(https://github.com/choderalab/pymbar/issues/419).'.format(pymbar_version),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+        else:
+            os_util.local_print('pymbar version detected is {}, while the recommended version is == 3.0.3. Please '
+                                'upgrade or downgrade your version or rerun with no_checks to suppress this error.'
+                                ''.format(pymbar_version),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+            raise SystemExit(1)
+
     if arguments.read_from_xvg not in ['auto', 'never', 'always']:
         raise ValueError("argument read_from_xvg: invalid choice: '{}' (choose from 'auto', 'never', 'always'"
                          "".format(arguments.read_from_xvg))

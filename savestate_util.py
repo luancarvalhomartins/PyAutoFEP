@@ -36,7 +36,7 @@ class SavableState(Namespace):
         mcs_dict: {
             frozenset([smiles_a, smiles_b]): mcs,
         },
-        ligand_data: {
+        ligands_data: {
             molecule_name: {
                 'molecule': rdkit.Chem.Mol,
                 'topology': [top_file_a, top_file_b],          # GROMACS-compatible topology files

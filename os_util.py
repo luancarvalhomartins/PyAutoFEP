@@ -104,15 +104,14 @@ def read_file_to_buffer(filename, die_on_error=False, return_as_list=False, erro
         return data_buffer
 
 
-def run_gmx(gmx_bin, arg_list, input_data='', output_file=None, return_output=False, alt_environment=None,
-            cwd=None, die_on_error=True, verbosity=0):
+def run_gmx(gmx_bin, arg_list, input_data='', output_file=None, alt_environment=None, cwd=None, die_on_error=True,
+            verbosity=0):
     """ Run gmx_bin with arg_list
 
     :param str gmx_bin: path to Gromacs binary
     :param list arg_list: pass these args to gmx
     :param str input_data: data to be send to gmx, empty str (default) to send nothing
     :param str output_file: save output (stdout + stderr) to this file (default: None = don't save)
-    :param bool return_output: if True, return stdout
     :param dict alt_environment: environment to be passed (on top of current) to Gromacs
     :param str cwd: run in this directory
     :param bool die_on_error: raise error if command returns a error code
@@ -150,8 +149,7 @@ def run_gmx(gmx_bin, arg_list, input_data='', output_file=None, return_output=Fa
         if output_file is not None:
             with open(output_file, 'w') as fh:
                 fh.write(stdout)
-        if return_output:
-            return stdout, stderr
+        return namedtuple('ReturnData', 'stdout stderr code')(stdout, stderr, gmx_handler.returncode)
 
 
 def assemble_shell_command(gmx_bin, arg_list, input_data='', output_file=None, cwd=None, die_on_error=True,
@@ -171,27 +169,27 @@ def assemble_shell_command(gmx_bin, arg_list, input_data='', output_file=None, c
                 ''.format(gmx_bin, arg_list, input_data, output_file, verbosity),
                 msg_verbosity=verbosity_level.debug, current_verbosity=verbosity)
 
-    return_output = '( cd {} && '.format(cwd) if cwd else ''
+    full_shell_command = '( cd {} && '.format(cwd) if cwd else ''
     for old, new in {'\n': r'\n', '"': r'\"'}.items():
         input_data = input_data.replace(old, new)
-    return_output += 'printf "{}" | '.format(input_data) if input_data else ''
+    full_shell_command += 'printf "{}" | '.format(input_data) if input_data else ''
 
     if isinstance(gmx_bin, list):
-        return_output += ' '.join(gmx_bin + arg_list)
+        full_shell_command += ' '.join(gmx_bin + arg_list)
     elif type(gmx_bin) == str:
-        return_output += ' '.join([gmx_bin] + arg_list)
+        full_shell_command += ' '.join([gmx_bin] + arg_list)
     else:
         local_print('Could not understand gmx bin input to run_gmx. gmx_bin = {} (type = {}). Invalid type'
                     ''.format(gmx_bin, type(gmx_bin)),
                     msg_verbosity=verbosity_level.error, current_verbosity=verbosity)
         raise TypeError("expected str or list, not {}".format(type(gmx_bin)))
 
-    return_output += ' > {} 2>&1'.format(output_file) if output_file else ''
-    return_output += r' )'.format(cwd) if cwd else ''
-    return_output += ' || {{ echo "Failed to run command {} at line ${{LINENO}}" && exit; }}' \
-                     ''.format(input_data) if die_on_error else ''
+    full_shell_command += ' > {} 2>&1'.format(output_file) if output_file else ''
+    full_shell_command += r' )'.format(cwd) if cwd else ''
+    full_shell_command += ' || {{ echo "Failed to run command {} at line ${{LINENO}}" && exit; }}' \
+                          ''.format(input_data) if die_on_error else ''
 
-    return return_output
+    return full_shell_command
 
 
 def detect_type(value, test_for_boolean=True, test_for_dict=False, test_for_list=False, list_max_split=0, verbosity=0):
@@ -429,6 +427,7 @@ def inner_search(needle, haystack, apply_filter=None, find_last=False, die_on_er
         return idx
 
 
+# FIXME: remove this
 def file_copy(src, dest, follow_symlinks=True, error_if_exists=False, verbosity=0):
     """ Copy file, data and metadata, optionally returning an error if dest exists
 

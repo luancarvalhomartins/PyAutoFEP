@@ -66,14 +66,14 @@ def guess_water_box(solvent_box, pdb2gmx_topology='', verbosity=0):
 
     if solvent_box is None:
         # 4.1 User wants automatic detection of water type. Get water topology from pdb2gmx topology file
-        pdb2gmx_topoology_data = os_util.read_file_to_buffer(pdb2gmx_topology, die_on_error=True,
-                                                             error_message='Failed to read topology from pdb2gmx. '
-                                                                           'Cannot continue. Verify the system '
-                                                                           'builder intermediate files in {}'
-                                                                           ''.format(build_base_dir),
+        pdb2gmx_topology_data = os_util.read_file_to_buffer(pdb2gmx_topology, die_on_error=True,
+                                                            error_message='Failed to read topology from pdb2gmx. '
+                                                                          'Cannot continue. Verify the system '
+                                                                          'builder intermediate files in {}'
+                                                                          ''.format(build_base_dir),
                                                              return_as_list=True, verbosity=verbosity)
         try:
-            water_topology = pdb2gmx_topoology_data[pdb2gmx_topoology_data.index('; Include water topology\n') + 1]
+            water_topology = pdb2gmx_topology_data[pdb2gmx_topology_data.index('; Include water topology\n') + 1]
         except ValueError:
             os_util.local_print('Failed to find a water topology in file {}. Cannot guess the correct water box to '
                                 'use. Cannot continue. Please, check build system files in {} or set solvent_box.'
@@ -86,9 +86,11 @@ def guess_water_box(solvent_box, pdb2gmx_topology='', verbosity=0):
             for each_model in water_models:
                 if water_topology.find(each_model) != -1:
                     solvent_box = water_box
-                    os_util.local_print('Using water box {} because the water line in topology {} is importing water '
-                                        'model {}. If this is wrong, please, set solvent_box explicitly.'
-                                        ''.format(water_box, water_box_data, each_model),
+                    os_util.local_print('Using water box {} because the water line "{}" in topology file {} is '
+                                        'importing water model {}. If this is wrong, please, set solvent_box '
+                                        'explicitly.'
+                                        ''.format(water_box, water_topology.replace('\n', '\\n'), pdb2gmx_topology,
+                                                  each_model),
                                         current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
                     break
             else:
@@ -465,8 +467,25 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                    '-c', build_files_dict['systemsolv_gro'], '-p', build_files_dict['systemsolv_top'],
                    '-o', build_files_dict['genion_tpr'], '-maxwarn', str(gmx_maxwarn),
                    '-po', build_files_dict['mdout_mdp']]
-    os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'],
-                    verbosity=verbosity)
+    gmx_data = os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'], die_on_error=False,
+                               verbosity=verbosity)
+    if gmx_data.code != 0:
+        if os_util.inner_search('number of coordinates in coordinate file', gmx_data.stderr) is False:
+            os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
+                                'stderr:\n{}\n\n{}\nThis is likely caused by a failing to edit the intermediate '
+                                'topology file {}. Rerunning with output_hidden_temp_dir=False may solve this issue.'
+                                ''.format(gmx_bin, grompp_list[0], gmx_data.code, [gmx_bin] + grompp_list,
+                                          gmx_data.stdout, gmx_data.stderr, '=' * 50,
+                                          build_files_dict['systemsolv_top']),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        else:
+            os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
+                                'stderr:\n{}'
+                                ''.format(gmx_bin, grompp_list[0], gmx_data.code, [gmx_bin] + grompp_list,
+                                          gmx_data.stdout, gmx_data.stderr),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
 
     # 5.2. Run genion
     shutil.copy2(build_files_dict['systemsolv_top'], build_files_dict['fullsystem_top'])
@@ -1368,27 +1387,27 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
 
             # First generate a naive file
             dummy_str = 'q\n'
-            stdout, stderr = os_util.run_gmx(gmx_bin, index_cmd, input_data=dummy_str, verbosity=verbosity,
-                                             alt_environment={'GMX_MAXBACKUP': '-1'}, return_output=True)
+            os_util.run_gmx(gmx_bin, index_cmd, input_data=dummy_str, verbosity=verbosity,
+                            alt_environment={'GMX_MAXBACKUP': '-1'})
 
             # Then uniquify its names
             uniquify_index_file(new_index_file, verbosity=verbosity)
 
+            # FIXME: this ignores custom names provided by the user
             # Now add the groups
             groups_str = '{}\nq\n'.format('\n'.join([each_element for each_name, each_element in index_data.items()]))
 
             index_cmd = ['make_ndx', '-n', new_index_file, '-o', new_index_file]
-            stdout, stderr = os_util.run_gmx(gmx_bin, index_cmd, input_data='{}\nq\n'.format(groups_str),
-                                             verbosity=verbosity, alt_environment={'GMX_MAXBACKUP': '-1'},
-                                             return_output=True)
+            gmx_data = os_util.run_gmx(gmx_bin, index_cmd, input_data='{}\nq\n'.format(groups_str),
+                                       verbosity=verbosity, alt_environment={'GMX_MAXBACKUP': '-1'})
         else:
-            stdout, stderr = os_util.run_gmx(gmx_bin, index_cmd, input_data='q\n', verbosity=verbosity,
-                                             return_output=True, alt_environment={'GMX_MAXBACKUP': '-1'})
+            gmx_data = os_util.run_gmx(gmx_bin, index_cmd, input_data='q\n', verbosity=verbosity,
+                                       alt_environment={'GMX_MAXBACKUP': '-1'})
 
         if logfile:
             with open(logfile, 'w') as fh:
-                fh.write(stderr)
-                fh.write(stdout)
+                fh.write(gmx_data.stderr)
+                fh.write(gmx_data.stdout)
 
     else:
         os_util.local_print('Invalid selection method {}. Please select either "internal" or "mdanalysis".'
@@ -1522,7 +1541,8 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     os_util.makedir(build_water_dir)
 
     # These are the intermediate build files
-    build_files_dict = {index: os.path.join(build_water_dir, filename.format(time.strftime('%H%M%S_%d%m%Y')))
+    timestamp = time.strftime('%H%M%S_%d%m%Y')
+    build_files_dict = {index: os.path.join(build_water_dir, filename.format(timestamp))
                         for index, filename in {'ligand_pdb': 'ligand_step1_{}.pdb',
                                                 'ligand_top': 'ligand_step1_{}.top',
                                                 'ligandbox_pdb': 'ligandbox_pdb_step2_{}.pdb',
@@ -1610,7 +1630,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     os_util.run_gmx(gmx_bin, solvate_list, '', build_files_dict['solvate_log'], verbosity=verbosity,
                     alt_environment={'GMX_MAXBACKUP': '-1'})
 
-    # See the same the comment in prepare_complex_system
+    # See the comment in prepare_complex_system
     try:
         os.sync()
     except AttributeError:
@@ -1626,8 +1646,24 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                    '-c', build_files_dict['ligandsolv_pdb'], '-p', build_files_dict['ligandsolv_top'],
                    '-o', build_files_dict['genion_tpr'], '-maxwarn', str(gmx_maxwarn),
                    '-po', build_files_dict['mdout_mdp']]
-    os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'], verbosity=verbosity)
-
+    gmx_data = os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'], verbosity=verbosity)
+    if gmx_data.code != 0:
+        if os_util.inner_search('number of coordinates in coordinate file', gmx_data.stderr) is False:
+            os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
+                                'stderr:\n{}\n\n{}\nThis is likely caused by a failing to edit the intermediate '
+                                'topology file {}. Rerunning with output_hidden_temp_dir=False may solve this issue.'
+                                ''.format(gmx_bin, grompp_list[0], gmx_data.code, [gmx_bin] + grompp_list,
+                                          gmx_data.stdout, gmx_data.stderr, '=' * 50,
+                                          build_files_dict['ligandsolv_top']),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        else:
+            os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
+                                'stderr:\n{}'
+                                ''.format(gmx_bin, grompp_list[0], gmx_data.code, [gmx_bin] + grompp_list,
+                                          gmx_data.stdout, gmx_data.stderr),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
     # Run genion
     shutil.copy2(build_files_dict['ligandsolv_top'], build_files_dict['fullsystem_top'])
     genion_list = ['genion', '-s', build_files_dict['genion_tpr'], '-p', build_files_dict['fullsystem_top'],
@@ -1638,9 +1674,9 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                     verbosity=verbosity)
 
     # Prepare index
-    index_list = ['make_ndx', '-f', build_files_dict['fullsystem_pdb'], '-o', build_files_dict['index_ndx']]
-    os_util.run_gmx(gmx_bin, index_list, input_data='q\n', output_file=build_files_dict['makendx_log'],
-                    alt_environment={'GMX_MAXBACKUP': '-1'}, verbosity=verbosity)
+    make_index(new_index_file=build_files_dict['index_ndx'], structure_data=build_files_dict['fullsystem_pdb'],
+               method=arguments.selection_method, logfile=build_files_dict['makendx_log'], gmx_bin=gmx_bin,
+               verbosity=verbosity)
 
     copywaterfiles = protein_topology_files + [build_files_dict['fullsystem_top'], build_files_dict['fullsystem_pdb'],
                                                build_files_dict['index_ndx']]
@@ -2697,19 +2733,37 @@ if __name__ == '__main__':
     if arguments.verbose <= 3:
         pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
 
-    if arguments.perturbations_dir and os.path.exists(arguments.perturbations_dir):
-        if not arguments.no_checks:
-            os_util.local_print('Output directory "{}" exists. Cannot continue. Remove/rename {} or use another '
-                                'perturbation_dir. Alternatively, you can rerun with no_checks, so I will overwrite '
-                                'the output.'
-                                ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-            raise FileExistsError('{} exists'.format(arguments.perturbations_dir))
-        else:
-            os_util.local_print('Output directory {} exists. Because you are running with no_checks, I will OVERWRITE '
-                                '{}!'
-                                ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+    if arguments.perturbations_dir:
+        if os.path.exists(arguments.perturbations_dir) and arguments.output_packing == 'dir':
+            if not arguments.no_checks:
+                os_util.local_print('Output directory "{}" exists. Cannot continue. Remove/rename {} or use another '
+                                    'perturbation_dir. Alternatively, you can rerun with no_checks, so I will '
+                                    'overwrite the output directory.'
+                                    ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+                raise FileExistsError('{} exists'.format(arguments.perturbations_dir))
+            else:
+                os_util.local_print('Output directory {} exists. Because you are running with no_checks, I will '
+                                    'OVERWRITE {}!'
+                                    ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+        for extension in ['bin', 'tgz']:
+            output_file = arguments.perturbations_dir + os.extsep + extension
+            if os.path.exists(output_file) and arguments.output_packing == extension:
+                if not arguments.no_checks:
+                    os_util.local_print('Output file "{}" exists (and you are using output_packing={}). Cannot '
+                                        'continue. Remove/rename {} or use another perturbation_dir. Alternatively, '
+                                        'you can rerun with no_checks, so I will overwrite the output file.'
+                                        ''.format(output_file, arguments.output_packing, output_file),
+                                        msg_verbosity=os_util.verbosity_level.error,
+                                        current_verbosity=arguments.verbose)
+                    raise FileExistsError('{} exists'.format(output_file))
+                else:
+                    os_util.local_print('Output file {} exists (and you are using output_packing={}). Because you are'
+                                        ' running with no_checks, I will OVERWRITE {}!'
+                                        ''.format(output_file, arguments.output_packing, output_file),
+                                        msg_verbosity=os_util.verbosity_level.error,
+                                        current_verbosity=arguments.verbose)
 
     for each_arg in ['structure']:
         if arguments[each_arg] is None:
@@ -2918,8 +2972,8 @@ if __name__ == '__main__':
                                 'generated index file may help. Note: a "Protein" group is expected in such file.'
                                 ''.format(arguments.index),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
-            os_util.run_gmx(arguments.gmx_bin_local, ['make_ndx', '-f', arguments.structure, '-o', arguments.index],
-                            'q\n')
+            make_index(new_index_file=arguments.index, structure_data=arguments.structure,
+                       method=arguments.selection_method, gmx_bin=arguments.gmx_bin_local)
             index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
 
         receptor_structure_mol = read_md_protein(arguments.structure, last_protein_atom=index_data['Protein'][-1])
@@ -2995,8 +3049,10 @@ if __name__ == '__main__':
             except KeyError as error:
                 if error.args[0] == 'thermograph':
                     os_util.local_print('Perturbation map data {} corrupt. Please, run generat_perturbation_map '
-                                        'or use perturbation_map argument or input file option.'
-                                        ''.format(progress_data.data_file), msg_verbosity=os_util.verbosity_level.error,
+                                        'or use perturbation_map argument or input file option. The following data was '
+                                        'read:\n{}'
+                                        ''.format(progress_data.data_file, progress_data.keys()),
+                                        msg_verbosity=os_util.verbosity_level.error,
                                         current_verbosity=arguments.verbose)
                     raise SystemExit(1)
                 else:
@@ -3048,12 +3104,15 @@ if __name__ == '__main__':
         else 'perturbations_{}'.format(time.strftime('%H%M%S_%d%m%Y'))
 
     if not arguments.output_hidden_temp_dir:
+        # User don't want a tempdir in tmpfs, use a fake tempdir in pwd instead. cleanup is lambda: None so it won't be
+        # removed when tmpdir.cleanup() is called
         tmpdir = all_classes.Namespace({'name': os.getcwd(), 'cleanup': lambda: None})
         os_util.local_print('Preparing perturbations in {}. This directory will not be removed upon completion.'
                             ''.format(os.path.join(tmpdir.name, original_base_pert_dir)),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
         os_util.makedir(tmpdir.name, verbosity=arguments.verbose)
     else:
+        # Using a regular temp dir
         tmpdir = tempfile.TemporaryDirectory()
 
     base_pert_dir = os.path.join(tmpdir.name, original_base_pert_dir)
@@ -3184,7 +3243,7 @@ if __name__ == '__main__':
         unwanted_files += ['lambda{}'.format(i) for i in range(len(this_lambda_table['coulA']))]
 
         if arguments.pre_solvated:
-            # User provided a pre-solvated strucuture
+            # User provided a pre-solvated structure
             output_structure_file = os.path.join(base_pert_dir, morph_dir, 'protein', 'FullSystem.pdb')
             output_topology_file = os.path.join(base_pert_dir, morph_dir, 'protein', 'FullSystem.top')
 
