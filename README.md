@@ -48,9 +48,13 @@ pip install pymbar==3.0.3 alchemlyb==0.3.0 # Later versions are discouraged
 ```
 
 ## Documentation
+### Manual
 [PyAutoFEP manual](https://github.com/luancarvalhomartins/PyAutoFEP/blob/master/docs/Manual.pdf) describes in detail its functions and options.
 
-A tutorial using the Farnesoid X receptor and a series of rigid binders is available. We plan to add more tutorials, covering specific aspects of PyAutoFEP using in the near future.
+### Tutorials
+- [Farnesoid X receptor tutorial](https://github.com/luancarvalhomartins/PyAutoFEP/tree/master/docs/tutorial01) - A tutorial using the Farnesoid X receptor and a series of rigid binders is available.
+ 
+(_We plan to add more tutorials, covering specific aspects of PyAutoFEP in the near future._)
 
 ## Issues & pull requests
 Issues and pull requests are welcome. When filling a GitHub issue, please include as much details as possible. Inputs and verbose outputs are also useful (if available/relevant). And thanks for reporting bugs!
