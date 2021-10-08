@@ -59,10 +59,23 @@ pip install pymbar==3.0.3 alchemlyb==0.3.0 # Later versions are discouraged
 ## Issues & pull requests
 Issues and pull requests are welcome. When filling a GitHub issue, please include as much details as possible. Inputs and verbose outputs are also useful (if available/relevant). And thanks for reporting bugs!
 
+## Roadmap
+Aside from bug squashing, I am currently working on charged perturbations and in a GUI.
+
+- Charged pertubations are being implemented using the alchemical co-ion method, which seems to be both most general and simpler to code. Briefly, and random water molecule will be perturbed to an ion of the opposite charge as the ligand perturbation. At first, only charge differences of +1 and -1 will be supported (this should cover most of the use cases, anyway). Code for regular, non-charged perturbations will not be affected.
+- A PyQt5 GUI for PyAutoFEP is being written. So far, a perturbation map editor was mostly implemented and a ligand table is beign worked on. The GUI will be frontend to the scripts, so that no function will depend on using the first. The GUI development is low priority right now, so this is not making into the tree anytime soon.
+
+Further goals
+- Covalent perturbations
+- Automated cycle-closure histeresis (and likely other analysis as well)
+- Support for peptides as ligands
+- More tutorials
+- A website
+
 ## Citation
 If PyAutoFEP is used in scientific publications, please cite:
 
-* LC Martins, EA Cino, RS Ferreira. PyAutoFEP: An Automated Free Energy Perturbation Workflow for GROMACS Integrating Enhanced Sampling Methods. **Journal of Chemical Theory and Computation**. _In press_. 2021. [LINK](https://pubs.acs.org/doi/10.1021/acs.jctc.1c00194)
+* LC Martins, EA Cino, RS Ferreira. PyAutoFEP: An Automated Free Energy Perturbation Workflow for GROMACS Integrating Enhanced Sampling Methods. _Journal of Chemical Theory and Computation_. **2021** _17_ (7), 4262-4273. [LINK](https://pubs.acs.org/doi/10.1021/acs.jctc.1c00194)
 
 ## Legal notice
 Copyright © 2021  Luan Carvalho Martins <luancarvalhomartins@gmail.com>
