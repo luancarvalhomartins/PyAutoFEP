@@ -1230,6 +1230,13 @@ class TopologyData:
 
             # Ignore empty, comment lines or macros
             if (len(each_line) == 0) or (each_line[0] in [';', '#']):
+                if each_line.startswith('#include'):
+                    os_util.local_print('#include directive found in file {}. This is not supported. Suppressing '
+                                        'import. Should the topology generation fail, double check your topology.'
+                                        ''.format(topology_files),
+                                        msg_verbosity=os_util.verbosity_level.warning,
+                                        current_verbosity=verbosity)
+                    raw_line = '; ' + raw_line + ' ; Suppressed, imports not allowed in ligand topology'
                 try:
                     actual_moleculetype.output_sequence.append(raw_line)
                 except (UnboundLocalError, AttributeError):

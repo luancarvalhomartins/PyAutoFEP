@@ -470,7 +470,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     gmx_data = os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'], die_on_error=False,
                                verbosity=verbosity)
     if gmx_data.code != 0:
-        if os_util.inner_search('number of coordinates in coordinate file', gmx_data.stderr) is False:
+        if os_util.inner_search('number of coordinates in coordinate file', gmx_data.stderr) is not False:
             os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
                                 'stderr:\n{}\n\n{}\nThis is likely caused by a failing to edit the intermediate '
                                 'topology file {}. Rerunning with output_hidden_temp_dir=False may solve this issue.'
@@ -781,9 +781,9 @@ def parse_input_molecules(input_data, verbosity=0):
                 else:
                     input_data = temp_dict
             except FileNotFoundError:
-                os_util.verbosity_level('Could not parse input ligand data "{}". Please see documentation'
-                                        ''.format(input_data),
-                                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+                os_util.local_print('Could not parse input ligand data "{}". Please see documentation'
+                                    ''.format(input_data),
+                                    current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
                 raise SystemExit(1)
             else:
                 # Read the directory structure, add all files with the same name and different extensions to a value
@@ -805,9 +805,9 @@ def parse_input_molecules(input_data, verbosity=0):
         ligand_dict = {}
         [ligand_dict.setdefault(os.path.splitext(each_file)[0], []).append(each_file) for each_file in input_data]
     elif isinstance(input_data, dict):
-        ligand_dict = input_data
+        ligand_dict = {str(k): v for k, v in input_data.items()}
     elif input_data is None:
-        ligand_dict = None
+        ligand_dict = {}
     else:
         os_util.local_print('Failed to read molecules data from {}. Could not parse data with type {}.\nInput data '
                             ''.format(input_data, type(input_data)),
@@ -2382,7 +2382,7 @@ def replace_multi_value_mdp(substitutions, mdp_data, no_checks=False, verbosity=
     """
 
     substitutions_groups = [('_TEMPERATURE', 'ref-t', 'tc-grps'), ('_PRESSURE', 'ref-p', 'pcoupltype')]
-    pressure_coulpe_num = {'isotropic': 1, 'semiisotropic': 2, 'anisotropic': 6, 'surface-tension': 2}
+    pressure_couple_num = {'isotropic': 1, 'semiisotropic': 2, 'anisotropic': 6, 'surface-tension': 2}
 
     for (alias_option, mdp_option, group_option) in substitutions_groups:
         if alias_option in substitutions:
@@ -2407,7 +2407,7 @@ def replace_multi_value_mdp(substitutions, mdp_data, no_checks=False, verbosity=
                 raise ValueError('Failed to parse mdp option {}'.format(group_option))
             else:
                 if alias_option == '_PRESSURE':
-                    num_tc_groups = pressure_coulpe_num.setdefault(group_line[0][0], False)
+                    num_tc_groups = pressure_couple_num.setdefault(group_line[0][0], False)
                     if not num_tc_groups:
                         os_util.local_print('Failed to parse {} data from mdp file. Please, check the mdp file.'
                                             ''.format(group_option),
@@ -2440,7 +2440,7 @@ def edit_mdp_file(mdp_file, substitutions, outfile=None, no_checks=False, verbos
 
     if not outfile:
         outfile = mdp_file
-        os_util.local_print('No outfile was suplied to edit_mdp_file. I will edit {} inplace.'.format(outfile),
+        os_util.local_print('No outfile was supplied to edit_mdp_file. I will edit {} inplace.'.format(outfile),
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     mdp_data = os_util.read_file_to_buffer(mdp_file, die_on_error=True, return_as_list=True,

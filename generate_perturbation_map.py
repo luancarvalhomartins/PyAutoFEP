@@ -25,6 +25,7 @@ from copy import deepcopy
 import networkx
 import argparse
 import rdkit.Chem
+import rdkit.Chem.PropertyMol
 import time
 import itertools
 from merge_topologies import find_mcs
@@ -127,6 +128,13 @@ def fill_thermograph(thermograph, molecules, pairlist=None, use_hs=False, thread
 
         # The edge cost is the number of perturbed atoms in a hypothetical transformation between the pair.
         perturbed_atoms = (atoms_i - num_core_atoms) + (atoms_j - num_core_atoms)
+        if perturbed_atoms == 0:
+            os_util.local_print('The perturbation between {} and {} would change no heavy atoms. Currently, this is '
+                                'not supported. Should you need to simulate this perturbation, pass perturbation_map '
+                                'directly to prepare_dual_topology.py'
+                                ''.format(molecules[each_mol_i].GetProp('_Name'),
+                                          molecules[each_mol_j].GetProp('_Name')))
+            raise SystemExit(1)
         thermograph.add_edge(each_mol_i, each_mol_j, perturbed_atoms=perturbed_atoms, desirability=1.0)
 
     all_pert_atoms = [i for _, _, i in thermograph.edges(data='perturbed_atoms')]
@@ -451,7 +459,7 @@ if __name__ == '__main__':
                                             msg_verbosity=os_util.verbosity_level.error,
                                             current_verbosity=arguments.verbose)
                         continue
-                progress_data['ligands_data'] = {mol_name: {'molecule': rdmol}
+                progress_data['ligands_data'] = {mol_name: {'molecule': rdkit.Chem.PropertyMol.PropertyMol(rdmol)}
                                                  for mol_name, rdmol in molecules_dict.items()}
                 progress_data['ligands_data_{}'.format(time.strftime('%d%m%Y_%H%M%S'))] = progress_data['ligands_data']
 

@@ -1003,7 +1003,8 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     # Construct a mol from SMILES
     common_struct_mol = rdkit.Chem.MolFromSmiles(common_struct_smiles, sanitize=False)
     for each_atom in common_struct_mol.GetAtoms():
-        each_atom.SetFormalCharge(0)
+        if each_atom.GetFormalCharge() < 0:
+            each_atom.SetFormalCharge(0)
         each_atom.SetNumRadicalElectrons(0)
         each_atom.SetNoImplicit(False)
     common_struct_mol.UpdatePropertyCache()
@@ -1174,11 +1175,8 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     os_util.local_print('This is the final MCS (unmodified, atoms hashed): {}'.format(mcs_result.smartsString),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    # FIXME: horrible work around for bug #2801 in rdkit. Replace of offending bonds with & after nothing. Revert this
-    #  after bug is fixed
-    altered_smarts = re.sub(r'(]|\)|^)&!@(\[|\(|$)', r'\1~&!@\2', mcs_result.smartsString)
 
-    core_mol = mol_util.adjust_query_properties(rdkit.Chem.MolFromSmarts(altered_smarts), generic_atoms=False,
+    core_mol = mol_util.adjust_query_properties(rdkit.Chem.MolFromSmarts(mcs_result.smartsString), generic_atoms=False,
                                                 ignore_isotope=False)
     match = altered_mol_list[0].GetSubstructMatch(core_mol, useChirality=kwargs['useChirality'],
                                                   useQueryQueryMatches=kwargs['useQueryQueryMatches'])
