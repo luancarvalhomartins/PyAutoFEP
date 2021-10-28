@@ -476,9 +476,26 @@ if __name__ == '__main__':
                                         msg_verbosity=os_util.verbosity_level.error,
                                         current_verbosity=arguments.verbose)
 
-        if len(molecules_dict) < 3 and not arguments.no_checks:
-            os_util.local_print('A total of molecules {} were read. I need at least 3 to construct a meaningful '
-                                'perturbation graph'.format(len(molecules_dict)),
+        if len(molecules_dict) == 2:
+            if arguments.no_checks:
+                os_util.local_print('Only two molecules were read. I need at least 3 to construct a meaningful '
+                                    'perturbation graph. Because you are running with no_checks, I will go on.'
+                                    ''.format(len(molecules_dict)),
+                                    msg_verbosity=os_util.verbosity_level.error,
+                                    current_verbosity=arguments.verbose)
+            else:
+                os_util.local_print('Only two molecules were read. I need at least 3 to construct a meaningful '
+                                    'perturbation graph. Should you need to use a single pair, please supply '
+                                    'perturbation_map directly to prepare_dual_topology.py. Alternatively, rerunning '
+                                    'with no_checks will suppress this error and go on.'
+                                    ''.format(len(molecules_dict)),
+                                    msg_verbosity=os_util.verbosity_level.error,
+                                    current_verbosity=arguments.verbose)
+                raise SystemExit(1)
+
+        elif len(molecules_dict) == 1:
+            os_util.local_print('A single molecule was read. With a single molecule, I cannot go on.'
+                                ''.format(len(molecules_dict)),
                                 msg_verbosity=os_util.verbosity_level.error,
                                 current_verbosity=arguments.verbose)
             raise SystemExit(1)
