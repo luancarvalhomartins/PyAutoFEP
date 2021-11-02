@@ -66,8 +66,12 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
     [kwargs.__setitem__(key, value) for key, value in required_values.items()]
 
     if not atom_map:
-        adjusted_core = mol_util.adjust_query_properties(rdkit.Chem.RemoveHs(rdkit.Chem.Mol(core)), verbosity=verbosity)
-        atom_map = list(enumerate(rdkit.Chem.RemoveHs(molecule).GetSubstructMatch(adjusted_core)))
+        adjusted_core = mol_util.adjust_query_properties(core, verbosity=verbosity)
+        atom_map = []
+        for ai, aj in enumerate(molecule.GetSubstructMatch(adjusted_core)):
+            if not (molecule.GetAtomWithIdx(aj).GetAtomicNum() == 1 or
+                    adjusted_core.GetAtomWithIdx(ai).GetAtomicNum() == 1):
+                atom_map.append((aj, ai))
         if not atom_map:
             os_util.local_print('Failed to match molecule {} to core {} in constrained_embed_forcefield. Cannot '
                                 'continue'.format(rdkit.Chem.MolToSmiles(molecule),
@@ -967,13 +971,9 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
 
-    # FIXME: horrible work around for bug #2801 in rdkit. Replace offending bonds with & after nothing. Revert this
-    #  after bug is fixed
-    altered_smarts = re.sub(r'(]|\)|^)&!@(\[|\(|$)', r'\1~&!@\2', mcs_result.smartsString)
-
     os_util.local_print('This is the first MCS (raw, atoms hashed): {}'.format(mcs_result.smartsString),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-    tempmol = rdkit.Chem.MolFromSmarts(altered_smarts)
+    tempmol = rdkit.Chem.MolFromSmarts(mcs_result.smartsString)
     if tempmol is None:
         os_util.local_print('Internal error: FindMCS returned an invalid SMARTS (raw SMARTS): {}'
                             ''.format(mcs_result.smartsString),
@@ -982,10 +982,10 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     [atom.SetAtomicNum(atom.GetIsotope() % 100) for atom in tempmol.GetAtoms()]
     [atom.SetIsotope(0) for atom in tempmol.GetAtoms()]
     os_util.local_print('This is first MCS:\n\tSMARTS: {}\n\tTranslated SMILES: {}'
-                        ''.format(altered_smarts, rdkit.Chem.MolToSmiles(tempmol)),
+                        ''.format(mcs_result.smartsString, rdkit.Chem.MolToSmiles(tempmol)),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    core_mol = rdkit.Chem.MolFromSmarts(altered_smarts)
+    core_mol = rdkit.Chem.MolFromSmarts(mcs_result.smartsString)
     matches = get_substruct_matches_fallback(altered_mol_list[0], core_mol, verbosity=verbosity, kwargs=kwargs)
 
     if len(matches) > 1:
@@ -1156,6 +1156,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
             fh.write(img)
 
     # Find the actual, final MCS
+    first_mcs_result = mcs_result
     mcs_result = rdkit.Chem.rdFMCS.FindMCS(altered_mol_list, completeRingsOnly=kwargs['completeRingsOnly'],
                                            ringMatchesRingOnly=kwargs['ringMatchesRingOnly'],
                                            matchChiralTag=kwargs['matchChiralTag'],
@@ -1186,6 +1187,50 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
 
     os_util.local_print('This is the final MCS Smiles: {}'.format(common_struct_smiles),
                         msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+    # In case of very symmetric molecules and MCS, an bug may case atom hash to match to a smaller MCS.  Test if the
+    # new MCS is at least as large as the first one. If it does, fallback to rdkit.Chem.rdFMCS.FindMCS with heavy atoms
+    if (common_struct_mol.GetNumHeavyAtoms() > rdkit.Chem.MolFromSmiles(common_struct_smiles).GetNumHeavyAtoms()):
+        os_util.local_print('Second MCS round failed to find a larger MCS. These molecules maybe too symmetric. '
+                            'Falling back to rdkit.Chem.rdFMCS.FindMCS with hydrogens. This may take a long time!'
+                            ''.format(mcs_result.smartsString),
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        mcs_result = rdkit.Chem.rdFMCS.FindMCS(mol_list, completeRingsOnly=kwargs['completeRingsOnly'],
+                                               ringMatchesRingOnly=kwargs['ringMatchesRingOnly'],
+                                               matchChiralTag=kwargs['matchChiralTag'],
+                                               atomCompare=rdkit.Chem.rdFMCS.AtomCompare.CompareElements,
+                                               threshold=kwargs['threshold'], timeout=kwargs['timeout'],
+                                               seedSmarts=rdkit.Chem.MolToSmarts(common_struct_mol),
+                                               verbose=kwargs['verbose'])
+        if mcs_result.canceled or mcs_result.numAtoms == 0:
+            os_util.local_print('Failed to calculate MCS between molecules {}. Retry with a longer timeout.'
+                                ''.format([rdkit.Chem.MolToSmiles(each_mol) for each_mol in mol_list]),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+
+        core_mol = mol_util.adjust_query_properties(rdkit.Chem.MolFromSmarts(mcs_result.smartsString),
+                                                    generic_atoms=False, ignore_isotope=False)
+        temp_source_mol = mol_util.adjust_query_properties(rdkit.Chem.Mol(altered_mol_list[0]), generic_atoms=False,
+                                                    ignore_isotope=False)
+        match = temp_source_mol.GetSubstructMatch(core_mol, useChirality=kwargs['useChirality'],
+                                                  useQueryQueryMatches=kwargs['useQueryQueryMatches'])
+
+        if not match:
+            os_util.local_print('Failed to match molecule {} to common-core {} in find_mcs, after falling back to '
+                                'all-atoms rdkit.Chem.rdFMCS.FindMCS. Cannot go on.'
+                                ''.format(rdkit.Chem.MolToSmiles(temp_source_mol), rdkit.Chem.MolToSmarts(core_mol)),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+
+        common_struct_smiles = rdkit.Chem.MolFragmentToSmiles(mol_list[0], atomsToUse=match, isomericSmiles=True,
+                                                              canonical=True)
+
+        os_util.local_print('This is the final MCS Smiles: {}'.format(common_struct_smiles),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        mcs_result = all_classes.MCSResult(common_struct_smiles, num_atoms=mcs_result.numAtoms,
+                                           num_bonds=mcs_result.numBonds, canceled=False)
+        return mcs_result
 
     mcs_result = all_classes.MCSResult(common_struct_smiles, num_atoms=mcs_result.numAtoms,
                                        num_bonds=mcs_result.numBonds, canceled=False)
