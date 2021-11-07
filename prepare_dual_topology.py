@@ -902,6 +902,21 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                             ''.format(each_field, this_ext),
                                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                         raise SystemExit(-1)
+
+                    try:
+                        assert each_name == temp_mol.GetProp('_Name')
+                    except AssertionError:
+                        os_util.local_print('Molecule name read from {} is {}, while the ligand name is {}. Setting '
+                                            'molecule name to {}'
+                                            ''.format(each_field, temp_mol.GetProp('_Name'), each_name, each_name),
+                                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                        temp_mol.SetProp('_Name', each_name)
+                    except KeyError:
+                        os_util.local_print('Failed to read a molecule name from {}. Setting molecule name to {}'
+                                            ''.format(each_field, each_name),
+                                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                        temp_mol.SetProp('_Name', each_name)
+
                     new_dict['molecule'] = temp_mol
                 elif this_ext == '.pdb':
                     if not no_checks:
@@ -919,6 +934,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                             msg_verbosity=os_util.verbosity_level.error,
                                             current_verbosity=verbosity)
                         new_dict['molecule'] = rdkit.Chem.MolFromPDBFile(each_field, removeHs=False)
+                        temp_mol.SetProp('_Name', each_name)
                 elif this_ext in ['.itp', '.atp', '.top', '.str']:
                     new_dict.setdefault('topology', []).append(each_field)
                 elif os.path.isdir(each_field):
@@ -2150,12 +2166,13 @@ def process_scaling_input(input_data, verbosity=0):
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     scaling_data = os_util.detect_type(input_data, test_for_dict=True, verbosity=verbosity)
-    if isinstance(input_data, dict):
+
+    if isinstance(scaling_data, dict):
         # User supplied a dict
         pass
-    elif isinstance(input_data, str):
+    elif isinstance(scaling_data, str):
         # User supplied a filename, read its contents then try to process as dict
-        file_data = os_util.read_file_to_buffer(input_data, die_on_error=True, return_as_list=False,
+        file_data = os_util.read_file_to_buffer(scaling_data, die_on_error=True, return_as_list=False,
                                                 error_message='Failed to read scaling selection file.'
                                                               '', verbosity=verbosity)
         scaling_data = os_util.detect_type(file_data, test_for_dict=True, verbosity=verbosity)
@@ -2182,6 +2199,9 @@ def process_scaling_input(input_data, verbosity=0):
                                         ''.format(each_atom, molecule_name),
                                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                     raise SystemExit(1)
+
+    os_util.local_print('This is the solute scaling selection: {}.'.format(scaling_data),
+                        msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
     return scaling_data
 
@@ -2737,7 +2757,7 @@ if __name__ == '__main__':
         if os.path.exists(arguments.perturbations_dir) and arguments.output_packing == 'dir':
             if not arguments.no_checks:
                 os_util.local_print('Output directory "{}" exists. Cannot continue. Remove/rename {} or use another '
-                                    'perturbation_dir. Alternatively, you can rerun with no_checks, so I will '
+                                    'perturbations_dir. Alternatively, you can rerun with no_checks, so I will '
                                     'overwrite the output directory.'
                                     ''.format(arguments.perturbations_dir, arguments.perturbations_dir),
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
@@ -2752,7 +2772,7 @@ if __name__ == '__main__':
             if os.path.exists(output_file) and arguments.output_packing == extension:
                 if not arguments.no_checks:
                     os_util.local_print('Output file "{}" exists (and you are using output_packing={}). Cannot '
-                                        'continue. Remove/rename {} or use another perturbation_dir. Alternatively, '
+                                        'continue. Remove/rename {} or use another perturbations_dir. Alternatively, '
                                         'you can rerun with no_checks, so I will overwrite the output file.'
                                         ''.format(output_file, arguments.output_packing, output_file),
                                         msg_verbosity=os_util.verbosity_level.error,
@@ -2945,7 +2965,8 @@ if __name__ == '__main__':
             raise SystemExit(1)
         else:
             solute_scaling_list = generate_scaling_vector(1.0, arguments.solute_scaling, len(lambda_dict['coulA']))
-            solute_scaling_atoms_dict = process_scaling_input(arguments.solute_scaling_selection)
+            solute_scaling_atoms_dict = process_scaling_input(arguments.solute_scaling_selection,
+                                                              verbosity=arguments.verbose)
             if arguments.solute_scaling_bin == 'rest2':
                 scaling_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Tools', 'rest2.sh')
             elif arguments.solute_scaling_bin == 'rest1':
