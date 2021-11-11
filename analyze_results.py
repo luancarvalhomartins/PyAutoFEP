@@ -755,14 +755,14 @@ def plot_coordinates_demuxed_scatter(sampling_path, n_rows=None, n_cols=None, ma
     pl.savefig(output_file)
     pl.close(figure)
 
-
-def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=None):
+def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=None, verbosity=0):
     """ Plot a stacked bar plot from a nxn numpy array
 
     :param numpy.array data_matrix: data to be plotted
     :param float bar_width: width of the bar
     :param str colormap: matplotlib.cm color map
     :param str output_file: save plot to this file, default: svg to pwd
+    :param int verbosity: sets the verbosity level
     """
 
     if not output_file:
@@ -785,8 +785,8 @@ def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=
 
     norm = BoundaryNorm(numpy.linspace(0, n_rep, n_rep + 1), colormap.N)
     colorbar_handler = pl.colorbar(cm.ScalarMappable(norm=norm, cmap=colormap),
-                                   ticks=numpy.arange(0, n_rep + 1) + 0.5)
-    colorbar_handler.ax.set_yticklabels(numpy.arange(0, n_rep + 1))
+                                   ticks=numpy.arange(0, n_rep) + 0.5)
+    colorbar_handler.ax.set_yticklabels(numpy.arange(1, n_rep + 1))
     colorbar_handler.set_label('Replica', rotation=270)
 
     pl.tight_layout()
@@ -931,7 +931,8 @@ def analyze_perturbation(perturbation_name=None, perturbation_data=None, gromacs
                                                         sorted(hrex_data['sampling_path'].items())])
 
                     plot_stacked_bars(hamiltonian_vs_coord,
-                                      output_file=os.path.join(output_directory, 'hrex_coord_hamiltonians.svg'))
+                                      output_file=os.path.join(output_directory, 'hrex_coord_hamiltonians.svg'),
+                                      verbosity=verbosity)
                 else:
                     os_util.local_print('No replica exchange info found in the GROMACS log file {}. Assuming you did '
                                         'not run using HREX.'.format(gromacs_log),
@@ -1568,7 +1569,7 @@ if __name__ == '__main__':
     if len(found_systems) == 2:
         os_util.local_print('Calculating \u0394\u0394G as {} - {}'.format(*found_systems),
                             current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.info)
-        header_str = '=' * 50
+        header_str = '{:=^50}'.format(' Pairwise \u0394\u0394G ')
         header_str += '\n{:^30} {:^9} {:^9}'.format("Perturbation", *found_systems)
         os_util.local_print(header_str, current_verbosity=arguments.verbose,
                             msg_verbosity=os_util.verbosity_level.default)
@@ -1762,9 +1763,17 @@ if __name__ == '__main__':
                                      'error': [0.0] * len(ddg_to_center)}).set_index('Name')
         csv_data.to_csv(os.path.join(output_directory, arguments.output_ddg_to_center))
 
+        output_to_center = '{:=^50}'.format(' \u0394\u0394G to {} '.format(arguments.center_molecule))
+        output_to_center += '\n{:^30} {:^9}\n'.format("Molecule", "\u0394\u0394G")
+        output_to_center += '\n'.join(['{:^30} {:0.1f} {}'.format(each_name, each_ddg,
+                                                                  formatted_energy_units[arguments.units].text)
+                                       for each_name, each_ddg in ddg_to_center.items()])
+        os_util.local_print(output_to_center, msg_verbosity=os_util.verbosity_level.default,
+                            current_verbosity=arguments.verbose)
+
     if arguments.output_pairwise_ddg is not False:
-        if arguments.output_ddg_to_center is None:
-            arguments.output_ddg_to_center = 'pairwise_ddg.csv'
-        with open(os.path.join(output_directory, arguments.output_ddg_to_center), 'w', newline='') as fh:
+        if arguments.output_pairwise_ddg is None:
+            arguments.output_pairwise_ddg = 'pairwise_ddg.csv'
+        with open(os.path.join(output_directory, arguments.output_pairwise_ddg), 'w', newline='') as fh:
             csv_handler = csv.writer(fh)
             csv_handler.writerows(pairwise_ddg)
