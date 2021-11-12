@@ -27,7 +27,7 @@ from mol_util import obmol_to_rwmol
 from importlib import import_module
 
 
-def align_sequences_match_residues(mobile_seq, target_seq, seq_align_mat='blosum80', gap_penalty=-1.0, verbosity=0):
+def align_sequences_match_residues(mobile_seq, target_seq, seq_align_mat='BLOSUM80', gap_penalty=-1.0, verbosity=0):
     """ Align two aminoacid sequences using Bio.pairwise2.globalds and substution matrix seq_align_mat, return a tuple
     with two list of residues to be used in the 3D alignment (mobile, refence)
 
@@ -40,26 +40,21 @@ def align_sequences_match_residues(mobile_seq, target_seq, seq_align_mat='blosum
     """
     try:
         from Bio.pairwise2 import align
-        seq_align_mat = import_module('Bio.SubsMat.MatrixInfo').__dict__[seq_align_mat]
+        from Bio.Align import substitution_matrices
+        seq_align_mat = substitution_matrices.load(seq_align_mat)
     except ImportError as error:
         os_util.local_print('Failed to import Biopython with error: {}\nBiopython is necessary to sequence'
                             'alignment. Sequences to be aligned:\nReference: {}\nMobile: {}'
                             ''.format(error, target_seq, mobile_seq),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise ImportError(error)
-    except KeyError as error:
-        try:
-            from Bio.SubsMat.MatrixInfo import available_matrices
-        except ImportError:
-            os_util.local_print("Failed to import Biopython. The sequences fo your protein structures mismatch, so I "
-                                "need Biopython to align them. See documentation.",
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
+    except FileNotFoundError as error:
+        available_matrices = substitution_matrices.load()
         os_util.local_print('Failed to import substitution matrix {} with error: {}\nSubstitution matrix must be one '
-                            'from Bio.SubsMat.MatrixInfo (in this installation: {})'
+                            'of: {})'
                             ''.format(seq_align_mat, error, available_matrices),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise KeyError(error)
+        raise FileNotFoundError(error)
     else:
         align_result = align.globalds(target_seq, mobile_seq, seq_align_mat, gap_penalty,
                                       gap_penalty)[0]
@@ -111,7 +106,7 @@ def get_position_matrix(each_mol, each_mol_str=None, atom_selection=None, verbos
     return return_list
 
 
-def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align_mat='blosum80',
+def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align_mat='BLOSUM80',
                   gap_penalty=-1, verbosity=0):
     """ Align mobile_mol to reference_mol using method defined in align_method. Defaults to openbabel.OBAlign, which is
     fastest. rdkit's GetAlignmentTransform is much slower and may not work on larger systems.
@@ -135,23 +130,27 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
         import rdkit.Chem.rdMolAlign
         reference_mol_rwmol = obmol_to_rwmol(reference_mol)
         if reference_mol_rwmol is None:
-            print('[ERROR] Could not internally convert reference_mol')
-            if verbosity > 1:
-                print('[INFO] Dumping data to receptor_mol_error.pdb')
+            os_util.local_print('Could not internally convert reference_mol',
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            if verbosity >= os_util.verbosity_level.info:
+                os_util.local_print('Dumping data to receptor_mol_error.pdb',
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
                 reference_mol.write('mol', 'receptor_mol_error.pdb')
             raise SystemExit(1)
 
         mobile_mol_rwmol = obmol_to_rwmol(mobile_mol)
         if mobile_mol_rwmol is None:
-            print('[ERROR] Could not internally convert mobile_mol')
+            os_util.local_print('Could not internally convert OpenBabel mobile_mol to a RDKit.Chem.Mol object.',
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
 
-        if verbosity > 0:
-            print('[INFO] Done reading and converting reference_mol {} and mobile_mol {}'
-                  ''.format(reference_mol_rwmol.GetProp('_Name'), mobile_mol_rwmol.GetProp('_Name')))
+        os_utils.local_print('Done reading and converting reference_mol {} and mobile_mol {}'
+                             ''.format(reference_mol_rwmol.GetProp('_Name'), mobile_mol_rwmol.GetProp('_Name')),
+                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
         # FIXME: implement this
         transformation_mat = rdkit.Chem.rdMolAlign.GetAlignmentTransform(reference_mol_rwmol, mobile_mol_rwmol)
+        raise NotImplementedError('rdkit aligment method not implemented')
 
     elif align_method == 'openbabel':
         # FIXME: implement a Biopython-only method
@@ -179,7 +178,6 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
         reference_mol_vec = pybel.ob.vectorVector3(ref_atom_vec)
         mob_atom_vec = get_position_matrix(mobile_mol, mob_align_str)
         mobile_mol_vec = pybel.ob.vectorVector3(mob_atom_vec)
-
         os_util.local_print('Done extracting Ca from {} and {}'.format(reference_mol.title, mobile_mol.title),
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
@@ -195,8 +193,8 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
         # Prepare translation and rotation matrices
-        reference_mol_center = numpy.array([a.coords for a in reference_mol.atoms]).mean(0)
-        mobile_mol_center = numpy.array([a.coords for a in mobile_mol.atoms]).mean(0)
+        reference_mol_center = numpy.array([[a.GetX(), a.GetY(), a.GetZ()] for a in reference_mol_vec]).mean(0)
+        mobile_mol_center = numpy.array([[a.GetX(), a.GetY(), a.GetZ()] for a in mobile_mol_vec]).mean(0)
         translation_vector = pybel.ob.vector3(*reference_mol_center.tolist())
         centering_vector = pybel.ob.vector3(*(-mobile_mol_center).tolist())
         rot_matrix = align_obj.GetRotMatrix()
@@ -213,5 +211,6 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
 
     else:
         # TODO implement a internal alignment method
-        print('[ERROR] Unknown alignment method {}.'.format(align_method))
-        raise SystemExit(1)
+        os_util.local_print('Unknown alignment method {}. Currently, only "openbabel" is allowed.'.format(align_method),
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+        raise ValueError('Unknown alignment method {}.'.format(align_method))

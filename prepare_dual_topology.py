@@ -34,6 +34,7 @@ import tarfile
 import configparser
 import itertools
 from collections import OrderedDict
+from copy import copy
 
 import all_classes
 import process_user_input
@@ -531,7 +532,8 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
         shutil.copy2(each_source, os.path.join(base_dir, 'protein', each_dest))
 
-    return all_classes.Namespace({'build_dir': build_system_dir, 'structure': output_structure_file})
+    return all_classes.Namespace({'build_dir': build_system_dir, 'structure': output_structure_file,
+                                  'topology': output_topology_file})
 
 
 def prepare_output_scripts_data(header_template=None, script_type='bash', submission_args=None,
@@ -1162,6 +1164,7 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
             msg_string = '\n'.join(['{:=^30}'.format(' MD Data '), 'Loaded data from file {} using format {}'
                                                                    ''.format(structure_file, structure_format)])
             os_util.local_print(msg_string, msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
+            protein_data.data['file_path'] = structure_file
             return protein_data
 
 
@@ -1188,7 +1191,7 @@ def align_ligands(receptor_structure, poses_input=None, poses_reference_structur
     """
     # TODO: read data from other docking programs (eg: autodock-vina, rdock and dock 3.7)
 
-    for k, v in {'seq_align_mat': 'blosum80', 'gap_penalty': -1}.items():
+    for k, v in {'seq_align_mat': 'BLOSUM80', 'gap_penalty': -1}.items():
         kwargs.setdefault(k, v)
 
     if not poses_input and pose_loader not in ['superimpose']:
@@ -1218,7 +1221,8 @@ def align_ligands(receptor_structure, poses_input=None, poses_reference_structur
 
         docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
         docking_mol_local = extract_pdb_poses(poses_input, docking_receptor_mol,
-                                              ligand_residue_name=ligand_residue_name, verbosity=verbosity)
+                                              ligand_residue_name=ligand_residue_name, save_state=save_state,
+                                              verbosity=verbosity)
 
     elif pose_loader == 'autodock4':
         # This loader loads data from autodock4 output, it tries to detect results files and receptor, but can be given
@@ -1351,6 +1355,8 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
     :param int verbosity: verbosity level
     """
 
+    if index_data is None:
+        index_data = {}
     os_util.local_print('Entering make_index: new_index_file={}, structure_data={}, index_data={}, method={}, '
                         'gmx_bin={}, verbosity={}'
                         ''.format(new_index_file, structure_data, index_data, method, gmx_bin, verbosity),
@@ -1376,13 +1382,11 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
                           'Protein_LIG': 'protein or resname {}'.format(ligand_name),
                           'Water_and_ions': 'resname SOL or resname NA or resname CL or resname K'}
 
-        index_input = default_groups
-        if index_data is not None:
-            [index_input.update({k: v}) for k, v in default_groups.items() if k not in index_data]
+        [default_groups.setdefault(k, v) for k, v in index_data.items()]
 
         # Generate a group per item in index_data and writes to new_index_file
         with MDAnalysis.selections.gromacs.SelectionWriter(new_index_file, mode='w') as ndx:
-            for each_name, each_selection in index_data.items():
+            for each_name, each_selection in default_groups.items():
                 this_selection = structure_data.select_atoms(each_selection)
                 if this_selection.n_atoms == 0:
                     os_util.local_print('The index group {} created from the selection "{}" would be empty and will '
@@ -1768,7 +1772,8 @@ def create_fep_dirs(dir_name, base_pert_dir, new_files=None, extra_dir=None, ext
 
 def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, output_structure_file, index_data,
                                     input_topology='', output_topology_file='', num_protein_chains=1, radius=3,
-                                    selection_method='internal', ligand_name='LIG', verbosity=0):
+                                    selection_method='internal', ligand_name='LIG', input_structure_lig_name='LIG',
+                                    verbosity=0):
     """ Adds the ligand ligand_molecule to the pre-solvated structure input_structure_file, relying in info from
     index_file. If provided, a topology file can be edited to reflect changes.
 
@@ -1782,53 +1787,55 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     :param float radius: exclude water molecule this close to the ligand (default: 3.0 A)
     :param str selection_method: use mdanalysis, sklearn or internal (default) selection method
     :param str ligand_name: use this as ligand name
+    :param str input_structure_lig_name: remove this molecule from the input_structure_file. Default: LIG
     :param int verbosity: verbosity level
     :rtype: bool
     """
 
+    # Get the index of the last protein atom from the index, ligand will be inserted after it
     last_protein_atom = index_data['Protein'][-1]
+
+    # Get the hydrid ligand as PDB
     # FIXME: remove the need for setting molecule_name
     dual_topology_pdb = merge_topologies.dualmol_to_pdb_block(ligand_molecule, molecule_name=ligand_name,
                                                               verbosity=verbosity)
+    dual_topology_pdb = all_classes.PDBFile(dual_topology_pdb.splitlines(keepends=True))
 
-    # TODO: proper handling of the protein selection
-    fullmd_data = os_util.read_file_to_buffer(input_structure_file, die_on_error=True, return_as_list=True,
-                                              error_message='Failed to read input structure file.',
-                                              verbosity=verbosity)
-    for line_number, each_line in enumerate(fullmd_data[last_protein_atom:]):
-        line_number += last_protein_atom
-        if len(each_line) < 54:
-            continue
-        else:
-            try:
-                test_atom = int(each_line[6:11])
-            except ValueError:
-                continue
-            else:
-                if test_atom == last_protein_atom:
-                    full_structure = fullmd_data[:line_number + 1]
-                    os_util.local_print('Will insert ligand {} after atom {} of the system in file {}.'
-                                        ''.format(ligand_molecule.dual_molecule_name, last_protein_atom,
-                                                  input_structure_file),
-                                        msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-                    break
-    else:
+    # Get the last atom of the protein
+    fullmd_data = all_classes.PDBFile(input_structure_file)
+    try:
+        last_protein_atom = fullmd_data.atoms[last_protein_atom - 1]
+    except KeyError as error:
         os_util.local_print('Could not find the end of the protein (atom {}) in file {}.'
                             ''.format(last_protein_atom, input_structure_file),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise SystemExit(1)
+        raise KeyError(error)
 
-    for each_line in dual_topology_pdb.splitlines():
-        if len(each_line) > 1 and each_line.split()[0] in ('ATOM', 'HETATM'):
-            full_structure.extend('{}\n'.format(each_line))
+    # Add ligand atoms after the last protein atom
+    for i, each_atom in reversed(list(enumerate(dual_topology_pdb.atoms))):
+        each_atom.residue = None
+        fullmd_data.atoms.insert(fullmd_data.atoms.index(last_protein_atom) + 1, each_atom)
+        fullmd_data.file_lines.insert(last_protein_atom.line_num + 1, each_atom)
+    fullmd_data.update_atoms_from_lines()
 
-    full_structure.extend(fullmd_data[line_number + 1:])
-    with open(output_structure_file, 'w+') as outfile:
-        outfile.writelines(full_structure)
+    # Remove old ligand atoms, but do not touch added atoms
+    remove_atoms = []
+    for each_atom in fullmd_data.atoms:
+        if each_atom.resname.replace(' ', '') == input_structure_lig_name and each_atom not in dual_topology_pdb.atoms:
+            fullmd_data.file_lines[each_atom.line_num] = 'REMARK Atom {} {} {} suppressed, line {}\n' \
+                                                         ''.format(each_atom.name, each_atom.serial, each_atom.resname,
+                                                                   each_atom.line_num)
+            remove_atoms.append(each_atom)
+    for a in reversed(remove_atoms):
+        fullmd_data.atoms.remove(a)
+
+    fullmd_data.update_atom_lines()
+    fullmd_data.to_file(output_structure_file)
+    fullmd_data.to_file(os.path.dirname(output_structure_file) + 'before_' + os.path.basename(output_structure_file))
 
     # Remove clashing waters
     if selection_method == 'internal':
-        os_util.local_print('Internal selection method not implemented',
+        os_util.local_print('Internal selection method not implemented. Please, use selection_method=mdanalysis.',
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         # FIXME: implement this
         raise SystemExit(1)
@@ -1865,16 +1872,15 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     elif selection_method == 'mdanalysis':
         import MDAnalysis
 
-        lig_name = 'UNL'
         fullmd_data = MDAnalysis.Universe(output_structure_file)
 
         # Count clashing waters
         clashing_waters = fullmd_data.select_atoms("(byres around {:1.3} resname {}) and (resname SOL)"
-                                                   "".format(radius, lig_name)).n_residues
+                                                   "".format(radius, ligand_name)).n_residues
 
         # Construct the system without them
         new_system = fullmd_data.select_atoms("not ((byres around {:1.3} resname {}) and (resname SOL))"
-                                              "".format(radius, lig_name))
+                                              "".format(radius, ligand_name))
         with MDAnalysis.Writer(output_structure_file) as file_writer:
             file_writer.write(new_system)
 
@@ -2987,25 +2993,28 @@ if __name__ == '__main__':
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=arguments.verbose)
 
     if arguments.pre_solvated:
-        if index_data is False:
+        index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
+        if not index_data:
             os_util.local_print('Could not read index file {} and you supplied a pre-solvated system. I will generate '
                                 'one automatically using gmx make_ndx. If the script fails, supplying a previously '
                                 'generated index file may help. Note: a "Protein" group is expected in such file.'
                                 ''.format(arguments.index),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
             make_index(new_index_file=arguments.index, structure_data=arguments.structure,
-                       method=arguments.selection_method, gmx_bin=arguments.gmx_bin_local)
+                       method=arguments.selection_method, gmx_bin=arguments.gmx_bin_local, verbosity=arguments.verbose)
             index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
 
-        receptor_structure_mol = read_md_protein(arguments.structure, last_protein_atom=index_data['Protein'][-1])
+        receptor_structure_mol = read_md_protein(arguments.structure, last_protein_atom=index_data['Protein'][-1],
+                                                 verbosity=arguments.verbose)
     else:
         receptor_structure_mol = pybel.readfile('pdb', arguments.structure).__next__()
 
     ligands_dict = parse_ligands_data(arguments.input_ligands, savestate_util=progress_data,
                                       no_checks=arguments.no_checks, verbosity=arguments.verbose)
 
-    poses_input = parse_poses_data(parse_input_molecules(arguments.poses_input, verbosity=arguments.verbose),
-                                   no_checks=arguments.no_checks, verbosity=arguments.verbose)
+    input_poses = os_util.detect_type(arguments.poses_input, test_for_dict=True, test_for_list=True,
+                                      verbosity=arguments.verbose)
+    poses_input = parse_poses_data(input_poses, no_checks=arguments.no_checks, verbosity=arguments.verbose)
 
     if arguments.poses_advanced_options:
         arguments.poses_advanced_options = os_util.detect_type(arguments.poses_advanced_options, test_for_dict=True)
@@ -3312,6 +3321,7 @@ if __name__ == '__main__':
 
             unwanted_files += [os.path.basename(build_data.build_dir)]
             output_structure_file = build_data.structure
+            output_topology_file = build_data.topology
 
         protein_topology_files = [os.path.join(base_pert_dir, morph_dir, 'protein', each_file)
                                   for each_file in os.listdir(os.path.join(base_pert_dir, morph_dir, 'protein'))
@@ -3324,8 +3334,7 @@ if __name__ == '__main__':
         # Prepare water perturbations (this is irrespective of whether user used a pre-solvated system or not)
         water_data = prepare_water_system(dual_molecule_ligand=merged_data,
                                           water_dir=os.path.join(base_pert_dir, morph_dir, 'water'),
-                                          topology_file=arguments.topology,
-                                          solvate_data=solvate_data,
+                                          topology_file=output_topology_file, solvate_data=solvate_data,
                                           protein_topology_files=protein_topology_files,
                                           gmx_maxwarn=arguments.gmx_maxwarn, gmx_bin=arguments.gmx_bin_local,
                                           verbosity=arguments.verbose)

@@ -135,7 +135,6 @@ def test_align_ligands_superimpose2():
                                pose_loader='superimpose', verbosity=-1)
     resultmol = adjust_query_properties(rdkit.Chem.MolFromPDBFile(result_file))
     rdkit.Chem.MolToPDBFile(align_data['FXR_10'], 'error_pdb_fxr10.pdb')
-    print(GetBestRMS(resultmol, align_data['FXR_10']))
     assert (GetBestRMS(resultmol, align_data['FXR_10'])) < 0.1
     fxr12rms = GetBestRMS(resultmol, align_data['FXR_12'], map=[[(30, 0), (11, 1), (23, 2), (20, 3), (26, 35), (32, 34),
                                                                  (28, 6), (12, 7), (1, 8), (2, 9), (16, 10), (3, 11),

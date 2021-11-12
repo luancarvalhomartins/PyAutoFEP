@@ -146,6 +146,10 @@ def read_reference_structure(reference_structure, verbosity=0):
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     if isinstance(reference_structure, pybel.Molecule):
+        # Flag that we cannot know the file path, if it's not already present. OpenBabel MoleculeData mimics a dict,
+        # but lacks a setdefault method, so we're doing this the dumb way
+        if not 'file_path' in reference_structure.data:
+            reference_structure.data['file_path'] = False
         return reference_structure
 
     receptor_format = splitext(reference_structure)[1].lstrip('.')
@@ -163,6 +167,7 @@ def read_reference_structure(reference_structure, verbosity=0):
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
     else:
+        receptor_mol_local.data['file_path'] = reference_structure
         return receptor_mol_local
 
 

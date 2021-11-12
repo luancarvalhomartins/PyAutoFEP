@@ -911,7 +911,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                                               '{}_{}'.format(molecule1.GetProp("_Name"), molecule2.GetProp("_Name")))
 
 
-## HERE - implement MCS selection
+#FIXME: implement MCS selection
 def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     """ Find the MCS between molecules in mol_list
 
