@@ -1245,9 +1245,10 @@ class TopologyData:
                 continue
 
             # Test whenever a new declaration has started and update file_marker
-            this_directive = re.match('(?:\[\s+)(.*)(?:\s+\])', each_line)
+            this_directive = re.match('(?:\[\s+)(.*)(?:\s+\])', each_line, flags=re.IGNORECASE)
             if this_directive is not None:
-                if this_directive.group(1) == 'moleculetype':
+                cur_directive = this_directive.group(1).lower()
+                if cur_directive == 'moleculetype':
                     os_util.local_print('Reading molecule type directive',
                                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
                     self.output_sequence.append(self.MoleculeTypeData(self))
@@ -1255,7 +1256,7 @@ class TopologyData:
                     self.molecules.append(self.output_sequence[-1])
                     actual_moleculetype.output_sequence.append(raw_line)
                     file_marker = None
-                elif this_directive.group(1) in ['system', 'molecules', 'defaults']:
+                elif cur_directive in ['system', 'molecules', 'defaults']:
                     # system also ends moleculetypes
                     os_util.local_print("Suppressing [ {} ] directive of file {}".format(this_directive.group(1),
                                                                                          topology_files),
@@ -1264,22 +1265,22 @@ class TopologyData:
                                                 ''.format(raw_line.rstrip('\n'), this_directive.group(1)))
                     actual_moleculetype = None
                     file_marker = supress_code
-                elif this_directive.group(1) == 'atomtypes':
+                elif cur_directive == 'atomtypes':
                     os_util.local_print("Reading directive atomtypes from {}".format(topology_files),
                                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
                     file_marker = 'atomtypes'
                     self.output_sequence.append(raw_line)
-                elif this_directive.group(1) in molecule_directives:
+                elif cur_directive in molecule_directives:
                     os_util.local_print("Reading directive {} in molecule {} of file {}"
                                         "".format(each_line, actual_moleculetype.name, topology_files),
                                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-                    file_marker = molecule_directives[this_directive.group(1)]
+                    file_marker = molecule_directives[cur_directive]
                     actual_moleculetype.output_sequence.append(raw_line)
-                elif this_directive.group(1) in type_directives:
+                elif cur_directive in type_directives:
                     os_util.local_print("Reading type directive {} from file {}"
                                         "".format(each_line, topology_files),
                                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-                    file_marker = type_directives[this_directive.group(1)]
+                    file_marker = type_directives[cur_directive]
                     self.output_sequence.append('; {} Directive suppressed and all parameters inlined to molecules. '
                                                 'Dual topology code does not support online parameters\n'
                                                 ''.format(raw_line.rstrip('\n')))
@@ -1374,7 +1375,7 @@ class TopologyData:
             return_str = []
             for each_element in self.output_sequence:
                 if isinstance(each_element, self.__atomtype_data) or \
-                        re.match('(?:\[\s+)(atomtypes)(?:\s+\])', str(each_element)) is not None:
+                        re.match('(?:\[\s+)(atomtypes)(?:\s+\])', str(each_element), flags=re.IGNORECASE) is not None:
                     continue
                 else:
                     return_str.append(each_element.__str__())

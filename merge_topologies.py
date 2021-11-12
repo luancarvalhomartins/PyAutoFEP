@@ -540,7 +540,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise ValueError('molecules names are equal')
 
-        defaults_pattern = re.compile(r'(?:\[\s+)defaults(?:\s+]).*')
+        defaults_pattern = re.compile(r'(?:\[\s+)defaults(?:\s+]).*', flags=re.IGNORECASE)
 
         for (each_molecule, each_topology, each_top_file) in \
                 [[molecule1, topology1, file_topology1],
