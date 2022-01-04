@@ -1,13 +1,12 @@
 #! /usr/bin/env python3
 #
-import csv
 
 import matplotlib
-
 matplotlib.use('SVG')
-import matplotlib.pyplot as pl
-pl.rcParams['svg.fonttype'] = 'none'
+import matplotlib.pyplot as plt
+plt.rcParams['svg.fonttype'] = 'none'
 
+import csv
 import multiprocessing
 import threading
 import os
@@ -336,13 +335,13 @@ def plot_overlap_matrix(overlap_matrix, output_file=None, skip_lambda_index=()):
     n_states = overlap_matrix.shape[0]
 
     max_prob = overlap_matrix.max()
-    fig = pl.figure(figsize=(n_states / 2., n_states / 2.))
+    fig = plt.figure(figsize=(n_states / 2., n_states / 2.))
     fig.add_subplot(111, frameon=False, xticks=[], yticks=[])
 
     for i in range(n_states):
         if i != 0:
-            pl.axvline(x=i, ls='-', lw=0.5, color='k', alpha=0.25)
-            pl.axhline(y=i, ls='-', lw=0.5, color='k', alpha=0.25)
+            plt.axvline(x=i, ls='-', lw=0.5, color='k', alpha=0.25)
+            plt.axhline(y=i, ls='-', lw=0.5, color='k', alpha=0.25)
         for j in range(n_states):
             if overlap_matrix[j, i] < 0.005:
                 ii = ''
@@ -351,10 +350,10 @@ def plot_overlap_matrix(overlap_matrix, output_file=None, skip_lambda_index=()):
             else:
                 ii = ("%.2f" % overlap_matrix[j, i])[1:]
             alf = overlap_matrix[j, i] / max_prob
-            pl.fill_between([i, i + 1], [n_states - j, n_states - j], [n_states - (j + 1), n_states - (j + 1)],
-                            color='k', alpha=alf)
-            pl.annotate(ii, xy=(i, j), xytext=(i + 0.5, n_states - (j + 0.5)), size=8, textcoords='data', va='center',
-                        ha='center', color=('k' if alf < 0.5 else 'w'))
+            plt.fill_between([i, i + 1], [n_states - j, n_states - j], [n_states - (j + 1), n_states - (j + 1)],
+                             color='k', alpha=alf)
+            plt.annotate(ii, xy=(i, j), xytext=(i + 0.5, n_states - (j + 0.5)), size=8, textcoords='data', va='center',
+                         ha='center', color=('k' if alf < 0.5 else 'w'))
 
     if skip_lambda_index:
         ks = [int(l) for l in skip_lambda_index]
@@ -362,29 +361,29 @@ def plot_overlap_matrix(overlap_matrix, output_file=None, skip_lambda_index=()):
     else:
         ks = list(range(n_states))
     for i in range(n_states):
-        pl.annotate(ks[i], xy=(i + 0.5, 1), xytext=(i + 0.5, n_states + 0.5), size=10, textcoords=('data', 'data'),
-                    va='center', ha='center', color='k')
-        pl.annotate(ks[i], xy=(-0.5, n_states - (j + 0.5)), xytext=(-0.5, n_states - (i + 0.5)), size=10,
-                    textcoords=('data', 'data'), va='center', ha='center', color='k')
-    pl.annotate('$\lambda$', xy=(-0.5, n_states - (j + 0.5)), xytext=(-0.5, n_states + 0.5), size=10,
-                textcoords=('data', 'data'),
-                va='center', ha='center', color='k')
-    pl.plot([0, n_states], [0, 0], 'k-', lw=4.0, solid_capstyle='butt')
-    pl.plot([n_states, n_states], [0, n_states], 'k-', lw=4.0, solid_capstyle='butt')
-    pl.plot([0, 0], [0, n_states], 'k-', lw=2.0, solid_capstyle='butt')
-    pl.plot([0, n_states], [n_states, n_states], 'k-', lw=2.0, solid_capstyle='butt')
+        plt.annotate(ks[i], xy=(i + 0.5, 1), xytext=(i + 0.5, n_states + 0.5), size=10, textcoords=('data', 'data'),
+                     va='center', ha='center', color='k')
+        plt.annotate(ks[i], xy=(-0.5, n_states - (j + 0.5)), xytext=(-0.5, n_states - (i + 0.5)), size=10,
+                     textcoords=('data', 'data'), va='center', ha='center', color='k')
+    plt.annotate('$\lambda$', xy=(-0.5, n_states - (j + 0.5)), xytext=(-0.5, n_states + 0.5), size=10,
+                 textcoords=('data', 'data'),
+                 va='center', ha='center', color='k')
+    plt.plot([0, n_states], [0, 0], 'k-', lw=4.0, solid_capstyle='butt')
+    plt.plot([n_states, n_states], [0, n_states], 'k-', lw=4.0, solid_capstyle='butt')
+    plt.plot([0, 0], [0, n_states], 'k-', lw=2.0, solid_capstyle='butt')
+    plt.plot([0, n_states], [n_states, n_states], 'k-', lw=2.0, solid_capstyle='butt')
 
     cx = sorted(2 * list(range(n_states + 1)))
     cy = sorted(2 * list(range(n_states + 1)), reverse=True)
-    pl.plot(cx[2:-1], cy[1:-2], 'k-', lw=2.0)
-    pl.plot(numpy.array(cx[2:-3]) + 1, cy[1:-4], 'k-', lw=2.0)
-    pl.plot(cx[1:-2], numpy.array(cy[:-3]) - 1, 'k-', lw=2.0)
-    pl.plot(cx[1:-4], numpy.array(cy[:-5]) - 2, 'k-', lw=2.0)
+    plt.plot(cx[2:-1], cy[1:-2], 'k-', lw=2.0)
+    plt.plot(numpy.array(cx[2:-3]) + 1, cy[1:-4], 'k-', lw=2.0)
+    plt.plot(cx[1:-2], numpy.array(cy[:-3]) - 1, 'k-', lw=2.0)
+    plt.plot(cx[1:-4], numpy.array(cy[:-5]) - 2, 'k-', lw=2.0)
 
-    pl.xlim(-1, n_states)
-    pl.ylim(0, n_states + 1)
-    pl.savefig(output_file, bbox_inches='tight', pad_inches=0.0)
-    pl.close(fig)
+    plt.xlim(-1, n_states)
+    plt.ylim(0, n_states + 1)
+    plt.savefig(output_file, bbox_inches='tight', pad_inches=0.0)
+    plt.close(fig)
 
 
 def plot_curve_fitting(u_nk, ddg_all_pairs, ddg_error_all_pairs, output_file=None, skip_lambda_index=(),
@@ -477,7 +476,7 @@ def plot_curve_fitting(u_nk, ddg_all_pairs, ddg_error_all_pairs, output_file=Non
     w = h + 1 + 1 * (sq - h > 0.5)
     scale = round(w / 3., 1) + 0.4 if len(yy) > 13 else 1
     sf = numpy.ceil(scale * 3) if scale > 1 else 0
-    fig = pl.figure(figsize=(8 * scale, 6 * scale))
+    fig = plt.figure(figsize=(8 * scale, 6 * scale))
     matplotlib.rc('axes', facecolor='#E3E4FA')
     matplotlib.rc('axes', edgecolor='white')
     if skip_lambda_index:
@@ -486,7 +485,7 @@ def plot_curve_fitting(u_nk, ddg_all_pairs, ddg_error_all_pairs, output_file=Non
     else:
         ks = list(range(K))
     for i, (xx_i, yy_i) in enumerate(yy):
-        ax = pl.subplot(h, w, i + 1)
+        ax = plt.subplot(h, w, i + 1)
         ax.plot(xx_i, yy_i, color='r', ls='-', lw=3, marker='o', mec='r')
         ax.xaxis.set_ticks_position('bottom')
         ax.yaxis.set_ticks_position('left')
@@ -500,15 +499,15 @@ def plot_curve_fitting(u_nk, ddg_all_pairs, ddg_error_all_pairs, output_file=Non
                     xycoords=('axes fraction', 'axes fraction'), xytext=(0, -2), size=14,
                     textcoords='offset points', va='top', ha='center', color='#151B54',
                     bbox=dict(fc='w', ec='none', boxstyle='round', alpha=0.5))
-        pl.xlim(xx_i.min(), xx_i.max())
-    pl.annotate(r'$\mathrm{\Delta U_{i,i+1}\/(reduced\/units)}$', xy=(0.5, 0.03), xytext=(0.5, 0),
-                xycoords=('figure fraction', 'figure fraction'), size=20 + sf, textcoords='offset points',
-                va='center', ha='center', color='#151B54')
-    pl.annotate(r'$\mathrm{\Delta g_{i+1,i}\/(reduced\/units)}$', xy=(0.06, 0.5), xytext=(0, 0.5), rotation=90,
-                xycoords=('figure fraction', 'figure fraction'), size=20 + sf, textcoords='offset points',
-                va='center', ha='center', color='#151B54')
-    pl.savefig(output_file, 'cfm.svg')
-    pl.close(fig)
+        plt.xlim(xx_i.min(), xx_i.max())
+    plt.annotate(r'$\mathrm{\Delta U_{i,i+1}\/(reduced\/units)}$', xy=(0.5, 0.03), xytext=(0.5, 0),
+                 xycoords=('figure fraction', 'figure fraction'), size=20 + sf, textcoords='offset points',
+                 va='center', ha='center', color='#151B54')
+    plt.annotate(r'$\mathrm{\Delta g_{i+1,i}\/(reduced\/units)}$', xy=(0.06, 0.5), xytext=(0, 0.5), rotation=90,
+                 xycoords=('figure fraction', 'figure fraction'), size=20 + sf, textcoords='offset points',
+                 va='center', ha='center', color='#151B54')
+    plt.savefig(output_file, 'cfm.svg')
+    plt.close(fig)
 
 
 def preprocess_data_table(this_u_nk, detect_equilibration=False, calculate_tau_c=True, verbosity=0):
@@ -609,30 +608,30 @@ def plot_ddg_vs_time(forward_ddgs, reverse_ddgs, forward_ddg_errors, reverse_ddg
     else:
         reverse_timestep = [i * formatted_time_units[time_units].mult for i in reverse_timestep]
 
-    fig, ax = pl.subplots(figsize=(5, 4))
+    fig, ax = plt.subplots(figsize=(5, 4))
     ax.xaxis.set_ticks_position('bottom')
     ax.yaxis.set_ticks_position('left')
 
-    line1, _, _ = pl.errorbar(forward_timestep, forward_ddgs, yerr=forward_ddg_errors, color=forward_color, ls='-',
-                              lw=2, marker='o', mew=2.5, mec=forward_color, ms=6, zorder=2)
-    pl.fill_between(forward_timestep, forward_ddgs + forward_ddg_errors,
-                    forward_ddgs - forward_ddg_errors, color=forward_color, alpha=0.3, zorder=-4)
-    line2, _, _ = pl.errorbar(reverse_timestep, reverse_ddgs, yerr=reverse_ddg_errors, color=reverse_color, ls='-',
-                              lw=2, marker='s', mew=2.5, mec=reverse_color, ms=6, zorder=1)
-    pl.fill_between(forward_timestep, reverse_ddgs + reverse_ddg_errors,
-                    reverse_ddgs - reverse_ddg_errors, color=reverse_color, alpha=0.3, zorder=-5)
+    line1, _, _ = plt.errorbar(forward_timestep, forward_ddgs, yerr=forward_ddg_errors, color=forward_color, ls='-',
+                               lw=2, marker='o', mew=2.5, mec=forward_color, ms=6, zorder=2)
+    plt.fill_between(forward_timestep, forward_ddgs + forward_ddg_errors,
+                     forward_ddgs - forward_ddg_errors, color=forward_color, alpha=0.3, zorder=-4)
+    line2, _, _ = plt.errorbar(reverse_timestep, reverse_ddgs, yerr=reverse_ddg_errors, color=reverse_color, ls='-',
+                               lw=2, marker='s', mew=2.5, mec=reverse_color, ms=6, zorder=1)
+    plt.fill_between(forward_timestep, reverse_ddgs + reverse_ddg_errors,
+                     reverse_ddgs - reverse_ddg_errors, color=reverse_color, alpha=0.3, zorder=-5)
 
     ax.set_xlim(forward_timestep[0], forward_timestep[-1])
-    pl.yticks(fontsize=10)
+    plt.yticks(fontsize=10)
     units = formatted_energy_units[energy_units].text
     ax.set_xlabel('Simulation time ({})'.format(formatted_time_units[time_units].text), fontsize=12)
     ax.set_ylabel('ΔΔG ({})'.format(units), fontsize=12)
     ax.set_xticks(forward_timestep)
     ax.set_xticklabels(['{:.1f}'.format(i) for i in forward_timestep])
-    pl.legend((line1, line2), ['Forward', 'Reverse'], loc='best', prop=FontProperties(size=12))
-    pl.tight_layout()
-    pl.savefig(output_file)
-    pl.close(fig)
+    plt.legend((line1, line2), ['Forward', 'Reverse'], loc='best', prop=FontProperties(size=12))
+    plt.tight_layout()
+    plt.savefig(output_file)
+    plt.close(fig)
 
 
 def get_color(colors):
@@ -661,9 +660,9 @@ def plot_ddg_vs_lambda1(ddg_all_pairs, ddg_error_all_pairs, units='kJmol', color
     n_values = len(ddg_all_pairs[list(ddg_all_pairs.keys())[0]])
     x = numpy.arange(n_values)
     if x[-1] < 8:
-        fig = pl.figure(figsize=(8, 6))
+        fig = plt.figure(figsize=(8, 6))
     else:
-        fig = pl.figure(figsize=(len(x), 6))
+        fig = plt.figure(figsize=(len(x), 6))
     width = 1. / (n_values + 1)
     elw = 30 * width
 
@@ -672,26 +671,26 @@ def plot_ddg_vs_lambda1(ddg_all_pairs, ddg_error_all_pairs, units='kJmol', color
                                                          sorted(ddg_error_all_pairs.items()))):
         y = [each_value / formatted_energy_units[units].kB for each_value in values]
         ye = [each_value / formatted_energy_units[units].kB for each_value in error]
-        line = pl.bar(x + float(i) / len(ddg_all_pairs), y, color=colors, yerr=ye, lw=0.5,
-                      error_kw={'elinewidth': 0.5, 'ecolor': 'black', 'capsize': 0.5})
+        line = plt.bar(x + float(i) / len(ddg_all_pairs), y, color=colors, yerr=ye, lw=0.5,
+                       error_kw={'elinewidth': 0.5, 'ecolor': 'black', 'capsize': 0.5})
         lines += (line[0],)
-    pl.xlabel('States', fontsize=12, color='#151B54')
-    pl.ylabel(r'$\Delta G$ ' + formatted_energy_units[units].text, fontsize=12, color='#151B54')
-    pl.xticks(x + 0.5 * width * len(ddg_all_pairs), tuple(['%d-%d' % (i, i + 1) for i in x]), fontsize=8)
-    pl.yticks(fontsize=8)
-    pl.xlim(x[0], x[-1] + len(lines) * width)
-    ax = pl.gca()
+    plt.xlabel('States', fontsize=12, color='#151B54')
+    plt.ylabel(r'$\Delta G$ ' + formatted_energy_units[units].text, fontsize=12, color='#151B54')
+    plt.xticks(x + 0.5 * width * len(ddg_all_pairs), tuple(['%d-%d' % (i, i + 1) for i in x]), fontsize=8)
+    plt.yticks(fontsize=8)
+    plt.xlim(x[0], x[-1] + len(lines) * width)
+    ax = plt.gca()
     for each_dir in ['right', 'top', 'bottom']:
         ax.spines[each_dir].set_color('none')
     ax.yaxis.set_ticks_position('left')
     for tick in ax.get_xticklines():
         tick.set_visible(False)
 
-    leg = pl.legend(lines, ddg_all_pairs.keys(), loc=0, ncol=2, prop=FontProperties(size=10), fancybox=True)
+    leg = plt.legend(lines, ddg_all_pairs.keys(), loc=0, ncol=2, prop=FontProperties(size=10), fancybox=True)
     leg.get_frame().set_alpha(0.5)
-    pl.title('The free energy change breakdown', fontsize=12)
-    pl.savefig(output_file, bbox_inches='tight')
-    pl.close(fig)
+    plt.title('The free energy change breakdown', fontsize=12)
+    plt.savefig(output_file, bbox_inches='tight')
+    plt.close(fig)
 
 
 def plot_coordinates_demuxed_scatter(sampling_path, n_rows=None, n_cols=None, max_time=None,
@@ -717,7 +716,7 @@ def plot_coordinates_demuxed_scatter(sampling_path, n_rows=None, n_cols=None, ma
         n_rows = int(numpy.ceil(len(sampling_path) / float(n_cols)))
 
     # Plot paths
-    figure, axes = pl.subplots(n_rows, n_cols, figsize=[6, 6])
+    figure, axes = plt.subplots(n_rows, n_cols, figsize=[6, 6])
     figure.subplots_adjust(wspace=0, hspace=0)
 
     for i, a in zip(range(len(sampling_path)), axes.flatten()):
@@ -752,8 +751,8 @@ def plot_coordinates_demuxed_scatter(sampling_path, n_rows=None, n_cols=None, ma
         axes.flatten()[i].set_yticklabels([])
 
     figure.suptitle('Replica trajectory along hamiltonians', fontsize=12)
-    pl.savefig(output_file)
-    pl.close(figure)
+    plt.savefig(output_file)
+    plt.close(figure)
 
 def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=None, verbosity=0):
     """ Plot a stacked bar plot from a nxn numpy array
@@ -769,7 +768,7 @@ def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=
         output_file = 'hrex_coord_hamiltonians.svg'
 
     n_rep = data_matrix.shape[0]
-    fig, ax = pl.subplots(figsize=[4, 4])
+    fig, ax = plt.subplots(figsize=[4, 4])
     colormap = cm.get_cmap(colormap, n_rep)
     data_matrix = numpy.divide(data_matrix, data_matrix[:, 0].sum())
     ind = numpy.arange(n_rep)
@@ -784,14 +783,14 @@ def plot_stacked_bars(data_matrix, bar_width=0.5, colormap='tab20', output_file=
     ax.set_title('Replica sampling per hamiltonian')
 
     norm = BoundaryNorm(numpy.linspace(0, n_rep, n_rep + 1), colormap.N)
-    colorbar_handler = pl.colorbar(cm.ScalarMappable(norm=norm, cmap=colormap),
-                                   ticks=numpy.arange(0, n_rep) + 0.5)
+    colorbar_handler = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=colormap),
+                                    ticks=numpy.arange(0, n_rep) + 0.5)
     colorbar_handler.ax.set_yticklabels(numpy.arange(1, n_rep + 1))
     colorbar_handler.set_label('Replica', rotation=270)
 
-    pl.tight_layout()
-    pl.savefig(output_file)
-    pl.close(fig)
+    plt.tight_layout()
+    plt.savefig(output_file)
+    plt.close(fig)
 
 
 def analyze_perturbation(perturbation_name=None, perturbation_data=None, gromacs_log='', estimators_data=None,
@@ -1454,9 +1453,13 @@ if __name__ == '__main__':
             continue
 
         os_util.local_print('Processing directory {}'.format(each_entry),
-                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=arguments.verbose)
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
 
         for system in os.listdir(os.path.join(data_dir, each_entry)):
+            if not os.path.isdir(os.path.join(data_dir, each_entry, system)):
+                # User is likely using the FEP dir itself as input
+                continue
+
             # This should be a pickle file containing a dict to assemble the u_nk matrix
             pkl_file = os.path.join(data_dir, each_entry, system, 'md', 'rerun', 'unk_matrix.pkl')
 
