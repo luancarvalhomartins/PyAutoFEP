@@ -23,7 +23,6 @@ import numpy
 from matplotlib import cm
 from matplotlib.colors import BoundaryNorm
 from matplotlib.font_manager import FontProperties
-from alchemlyb.estimators import MBAR, BAR
 import pymbar.timeseries
 import re
 import all_classes
@@ -31,6 +30,12 @@ import savestate_util
 import os_util
 from all_classes import Namespace
 from io import StringIO
+
+from alchemlyb.estimators import BAR
+try:
+    from alchemlyb.estimators import AutoMBAR as MBAR
+except:
+    from alchemlyb.estimators import MBAR
 
 kB_kJ = 1.3806504 * 6.02214129 / 1000.0  # Boltzmann's constant (kJ/mol/K).
 formatted_energy_units = {
@@ -245,17 +250,13 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
 
                 if name == 'mbar':
 
-                    from distutils.version import LooseVersion
-                    from alchemlyb import __version__
-                    if LooseVersion(__version__) > LooseVersion('0.3.1'):
-                        alchemlyb_stdout = StringIO()
-                        sys.stdout = alchemlyb_stdout
-                        sys.stderr = alchemlyb_stdout
+                    alchemlyb_stdout = StringIO()
+                    sys.stdout = alchemlyb_stdout
+                    sys.stderr = alchemlyb_stdout
+
+                    try:
                         overlap_matrix = estimator_obj._mbar.computeOverlap()['matrix']
-                    else:
-                        alchemlyb_stdout = StringIO()
-                        sys.stdout = alchemlyb_stdout
-                        sys.stderr = alchemlyb_stdout
+                    except KeyError:
                         overlap_matrix = estimator_obj._mbar.computeOverlap()[2]
 
                     sys.stdout = sys.__stdout__
@@ -1312,18 +1313,36 @@ if __name__ == '__main__':
     arguments = process_user_input.read_options(Parser, unpack_section='analyze_results')
 
     # TODO: when pymbar bug #419 is fixed, add a check here to support newer versions
-    from pymbar.version import full_version as pymbar_version
-    from distutils.version import LooseVersion
-    if LooseVersion(pymbar_version) != LooseVersion('3.0.3'):
+    from alchemlyb import __version__ as alchemlyb_version
+    try:
+        from packaging.version import parse as version_fn
+    except ImportError:
+        try:
+            from distutils.version import LooseVersion as version_fn
+        except ImportError as error:
+            if arguments.no_checks:
+                os_util.local_print('Failed to import packaging.version and distutils.version, cannot run version '
+                                    'checking. Because you are running with no_checks, I will ignore this and go on.',
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+                version_fn = lambda x: True
+            else:
+                os_util.local_print('Failed to import packaging.version and distutils.version, cannot run version '
+                                    'checking. Please install python packaging or rerun with no_checks, so I will '
+                                    'ignore this checking.',
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+                raise error
+
+    if version_fn(alchemlyb_version) != version_fn('0.3.0') and version_fn(alchemlyb_version) < version_fn('0.6.0'):
         if arguments.no_checks:
-            os_util.local_print('pymbar version detected is {}, while the recommended version is == 3.0.3. Because you '
-                                'are running with no_checks, I will go on. Please be aware of pymbar bug #419 '
-                                '(https://github.com/choderalab/pymbar/issues/419).'.format(pymbar_version),
+            os_util.local_print('alchemlyb version detected is {}, while the recommended version is == 0.3.0 or >= '
+                                '0.6.0. Because you are running with no_checks, I will go on. Please be aware of'
+                                ' pymbar bug #419 (https://github.com/choderalab/pymbar/issues/419).'
+                                ''.format(alchemlyb_version),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
         else:
-            os_util.local_print('pymbar version detected is {}, while the recommended version is == 3.0.3. Please '
-                                'upgrade or downgrade your version or rerun with no_checks to suppress this error.'
-                                ''.format(pymbar_version),
+            os_util.local_print('alchemlyb version detected is {}, while the recommended version is == 3.0.3 or >= '
+                                '0.6.0. Please upgrade or downgrade your version or rerun with no_checks to suppress '
+                                'this error.'.format(alchemlyb_version),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
             raise SystemExit(1)
 
