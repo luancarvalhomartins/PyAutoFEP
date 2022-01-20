@@ -7,6 +7,15 @@ the analysis. Distinctivelly, PyAutoFEP supports multiple force fields, integrat
 Furthermore, it aims to be as flexible as possible, giving the user great control over all steps. Nevertheless, reasonable defaults and automation are 
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 
+## Announcements
+**Commit fe41f7d (19.01.2022)**<br/>
+This commit introduces a bunch of new features and code changes. Even though I tested newly implemented and rewritten code, **things may break**. Please, fill 
+issues should you experience any problem. Main changes:
+- Modifications to the atom matching functions in PyAutoFEP were done to implement support for user-supplied atom maps.
+- User-supplied atom maps are also available for the superimpose pose loader
+- Selecting 3D MCS for merge_topologies.merge_topologies is now supported (3D MCS in generate_perturbation_map.py and superimpose loader coming soon)
+- 3D MCS code rewritten for better support for ligand pairs with multiple atom matches
+
 ## Requirements
 - Common GNU programs: Bash, awk, tar
 - [GROMACS](https://www.gromacs.org/) 2016 or newer
