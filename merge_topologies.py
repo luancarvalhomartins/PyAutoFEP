@@ -25,6 +25,7 @@ import re
 from copy import deepcopy
 import time
 from collections.abc import Callable
+import itertools
 
 import rdkit.Chem
 import rdkit.Chem.rdFMCS
@@ -130,7 +131,7 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
 
 def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_atoms=None, randomseed=2342,
                                   num_conformers=200, volume_function='tanimoto', rigid_molecule_threshold=1,
-                                  num_threads=0, mcs=None, save_state=None, verbosity=0, **kwargs):
+                                  num_threads=0, mcs=None, atom_map=None, save_state=None, verbosity=0, **kwargs):
     """ Embed a molecule to target used a constrained core and maximizing volume similarity, as measured by
     volume_function. Symmetry will be taken in account.
 
@@ -148,6 +149,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
         constrained (default 1; -1: molecule is always flexible)
     :param int num_threads: use this many threads during conformer generation (0: max supported)
     :param str mcs: use this SMARTS as common core to merge molecules
+    :param list atom_map: if supplied, only an atom map containing all atom pairs in this min_atom_map will be returned,
+                          must be a iterable of tuples or lists
     :param savestate_util.SavableState save_state: saved state data
     :param int verbosity: set verbosity level
     :rtype: rdkit.Chem.Mol
@@ -199,10 +202,10 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                           molecule.GetNumHeavyAtoms()),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
-            atom_map = list(zip(get_substruct_matches_fallback(molecule, core_mol)[0],
-                                get_substruct_matches_fallback(target, core_mol)[0]))
+            this_atom_map = get_atom_map(molecule_a=molecule, molecule_b=target, core_mol=core_mol,
+                                         min_atom_map=atom_map, verbosity=verbosity)
             constrained_embed_forcefield(molecule, target, core_conf_id=core_conf_id, randomseed=randomseed,
-                                         atom_map=atom_map, num_conformations=1, **kwargs)
+                                         atom_map=this_atom_map, num_conformations=1, **kwargs)
             return molecule
 
         sanitize_return = rdkit.Chem.SanitizeMol(core_mol, catchErrors=True)
@@ -248,10 +251,14 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
         core_mol = mol_util.adjust_query_properties(core_mol, verbosity=verbosity)
-        # Prepare a coordinate map to supply to EmbedMultipleConfs
-        matches = get_substruct_matches_fallback(molecule, core_mol, verbosity=verbosity, kwargs=kwargs)
 
-        core_conf = core_mol.GetConformer(core_conf_id)
+        # Prepare a coordinate map to supply to EmbedMultipleConfs
+        if atom_map is not None:
+            matches = [get_atom_map(molecule_a=molecule, molecule_b=target, core_mol=core_mol, min_atom_map=atom_map,
+                                    verbosity=verbosity)]
+        else:
+            matches = get_atom_map(molecule_a=molecule, molecule_b=target, core_mol=core_mol, multiple_matches=True,
+                                   verbosity=verbosity)
 
         for match in matches:
             if len(match) + rigid_molecule_threshold >= molecule.GetNumHeavyAtoms():
@@ -269,28 +276,26 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
             else:
                 num_conformers = kwargs['numConfs']
 
-            coord_map = {endpoint_atom: core_conf.GetAtomPosition(core_atom)
-                         for core_atom, endpoint_atom in enumerate(match)}
+            coord_map = {endpoint_atom: target.GetConformer(core_conf_id).GetAtomPosition(core_atom)
+                         for endpoint_atom, core_atom in match}
 
-            num_conformers_before = molecule.GetNumConformers()
             try:
-                rdkit.Chem.AllChem.EmbedMultipleConfs(molecule, maxAttempts=kwargs['maxAttempts'],
-                                                      numConfs=num_conformers, randomSeed=kwargs['randomSeed'],
-                                                      useRandomCoords=kwargs['useRandomCoords'],
-                                                      clearConfs=False, coordMap=coord_map,
-                                                      ignoreSmoothingFailures=kwargs['ignoreSmoothingFailures'],
-                                                      useExpTorsionAnglePrefs=kwargs['useExpTorsionAnglePrefs'],
-                                                      enforceChirality=kwargs['enforceChirality'],
-                                                      boxSizeMult=kwargs['boxSizeMult'],
-                                                      numThreads=kwargs['numThreads'])
+                confs = rdkit.Chem.AllChem.EmbedMultipleConfs(molecule, maxAttempts=kwargs['maxAttempts'],
+                                                              numConfs=num_conformers, randomSeed=kwargs['randomSeed'],
+                                                              useRandomCoords=kwargs['useRandomCoords'],
+                                                              clearConfs=False, coordMap=coord_map,
+                                                              ignoreSmoothingFailures=kwargs['ignoreSmoothingFailures'],
+                                                              useExpTorsionAnglePrefs=kwargs['useExpTorsionAnglePrefs'],
+                                                              enforceChirality=kwargs['enforceChirality'],
+                                                              boxSizeMult=kwargs['boxSizeMult'],
+                                                              numThreads=kwargs['numThreads'])
             except RuntimeError:
-                pass
+                confs = []
 
-            if molecule.GetNumConformers() == num_conformers_before:
+            if len(confs) == 0:
                 os_util.local_print('EmbedMultipleConfs failed to generate conformations. Retrying with force field '
                                     'optimization-based constrained embed.',
                                     msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-                atom_map = [(endpoint_atom, core_atom) for core_atom, endpoint_atom in enumerate(match)]
                 constrained_embed_forcefield(molecule, core_mol, core_conf_id=core_conf_id, randomseed=randomseed,
                                              atom_map=atom_map, **kwargs)
         if molecule.GetNumConformers() == 0:
@@ -494,18 +499,35 @@ def dualmol_to_pdb_block(pseudomolecule, molecule_name=None, confId=-1, verbosit
 
 
 def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_checks=False, savestate=None, mcs=None,
-                     verbosity=0, **kwargs):
-    """ Reads two molecule files and topology files, and merge them into a dual topology structure
+                     atom_map=None, verbosity=0, **kwargs):
+    """Reads two molecule files and topology files, and merge them into a dual topology structure.
 
-    :param rdkit.Chem.rdkit molecule_a: molecule A
-    :param rdkit.Chem.rdkit molecule_b: molecule B
-    :param list file_topology1: GROMACS-compatible topology of molecule 1
-    :param list file_topology2: GROMACS-compatible topology of molecule 2
-    :param bool no_checks: ignore all tests and try to go on
-    :param savestate_util.SavableState savestate: saved state data
-    :param str mcs: use this SMARTS as common core to merge molecules
-    :param int verbosity: controls verbosity level
-    :rtype: MergedTopologies
+    Parameters
+    ----------
+    molecule_a : rdkit.Chem.rdkit
+        molecule A
+    molecule_b : rdkit.Chem.rdkit
+        molecule B
+    file_topology1 : list
+        GROMACS-compatible topology of molecule A
+    file_topology2 : list
+        GROMACS-compatible topology of molecule B
+    no_checks : bool
+        ignore all tests and try to go on
+    savestate : savestate_util.SavableState
+         saved state data
+    atom_map : list
+        if supplied, only an atom map containing all atom pairs in this min_atom_map will be returned, must be a
+        iterable of tuples or lists
+    mcs : str
+        use this SMARTS as common core to merge molecules
+    verbosity : int
+        sets verbosity level
+
+    Returns
+    -------
+    MergedTopologies
+
     """
 
     molecule1 = mol_util.process_dummy_atoms(molecule_a, verbosity=verbosity)
@@ -593,12 +615,28 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
     moleculetype_b = topology2.molecules[0]
 
     if not mcs:
-        # completeRingsOnly and matchValences are required to prepare a dual topology
-        commom_core_smiles = find_mcs([molecule1, molecule2], matchValences=True, ringMatchesRingOnly=True,
-                                      completeRingsOnly=True, verbosity=verbosity, savestate=savestate).smartsString
-        os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs and is {}'
-                            ''.format(molecule1.GetProp('_Name'), molecule2.GetProp('_Name'), commom_core_smiles),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+        if kwargs.get('mcs_type', 'graph') == 'graph':
+            # completeRingsOnly and matchValences are required to prepare a dual topology
+            commom_core_smiles = find_mcs([molecule1, molecule2], matchValences=True, ringMatchesRingOnly=True,
+                                          completeRingsOnly=True, verbosity=verbosity, savestate=savestate,
+                                          **kwargs).smartsString
+            os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs and is {}'
+                                ''.format(molecule1.GetProp('_Name'), molecule2.GetProp('_Name'), commom_core_smiles),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+        elif kwargs.get('mcs_type', 'graph') == '3d':
+            commom_core_smiles = find_mcs_3d(molecule_a=molecule1, molecule_b=molecule2,
+                                             num_threads=kwargs.get('num_threads', 0), verbosity=verbosity,
+                                             savestate=savestate).smartsString
+            os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
+                                ''.format(molecule1.GetProp('_Name'), molecule2.GetProp('_Name'), commom_core_smiles),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+        else:
+            os_util.local_print('MCS type {} not know, please select between "graph" and "3d"'
+                                ''.format(kwargs.get('mcs_type')),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+            raise ValueError('MCS type {} not know, please select between "graph" and "3d"'
+                             ''.format(kwargs.get('mcs_type')))
+
     else:
         # User supplied a MCS, do not save it
         commom_core_smiles = mcs
@@ -648,7 +686,8 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
     # Get the list of matching atoms from common_atoms -> molecule1 and common_atoms -> molecule2, then map to
     # into molecule1 -> molecule2
     core_structure = mol_util.adjust_query_properties(core_structure, verbosity=verbosity)
-    common_atoms = list(zip(molecule1.GetSubstructMatch(core_structure), molecule2.GetSubstructMatch(core_structure)))
+    common_atoms = get_atom_map(molecule_a=molecule1, molecule_b=molecule2, core_mol=core_structure,
+                                min_atom_map=atom_map, verbosity=verbosity)
 
     if len(common_atoms) < 3:
         os_util.local_print('Less than 3 common atoms were found between molecule {} (SMILES={}) and {} (SMILES={})'
@@ -1139,18 +1178,38 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
                                                            for idx, each_atom in enumerate(each_mol.GetAtoms())])),
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    if kwargs['plot']:
+    if kwargs['plot'] and verbosity >= os_util.verbosity_level.debug:
+        # Draws a representation of the MCS
         from rdkit.Chem import Draw
+
+        # First, prepare the MCS 2d coords
+        core_draw = mol_util.adjust_query_properties(rdkit.Chem.MolFromSmarts(mcs_result.smartsString),
+                                                     generic_atoms=False, ignore_isotope=False)
+        rdkit.Chem.AllChem.Compute2DCoords(core_draw)
+
+        # Then get a 2D representation of each molecule matching the core
         ms = [rdkit.Chem.Mol(x) for x in mol_list]
-        [rdkit.Chem.AllChem.Compute2DCoords(m) for m in ms]
+        try:
+            [rdkit.Chem.AllChem.GenerateDepictionMatching2DStructure(m, core_draw) for m in ms]
+        except ValueError:
+            [rdkit.Chem.AllChem.Compute2DCoords(m) for m in ms]
+
+        # Then draw, including the hash numbers
         for draw_mol, mol in zip(ms, altered_mol_list):
             [draw_mol.GetAtomWithIdx(each_atom.GetIdx()).SetProp('molAtomMapNumber', str(each_atom.GetIsotope()))
              for each_atom in mol.GetAtoms()]
-        core_draw = rdkit.Chem.Mol(core_mol)
-        rdkit.Chem.AllChem.Compute2DCoords(core_draw)
-        img = Draw.MolsToGridImage([*ms, core_draw], subImgSize=(300, 300),
-                                   legends=[m.GetProp('_Name') for m in ms] + ["MCS"],
-                                   useSVG=True)
+
+        # Highlight the common atoms
+        highlight_atoms = [m.GetSubstructMatch(core_mol) for m in altered_mol_list]
+        try:
+            img = Draw.MolsToGridImage([*ms, core_draw], subImgSize=(300, 300),
+                                       legends=[m.GetProp('_Name') for m in ms] + ["MCS"],
+                                       useSVG=True, highlightAtomLists=highlight_atoms)
+        except ValueError:
+            img = Draw.MolsToGridImage([*ms, core_draw], subImgSize=(300, 300),
+                                       legends=[m.GetProp('_Name') for m in ms] + ["MCS"],
+                                       useSVG=True)
+
         with open('mcs_plot_{}_{}.svg'.format('_'.join([os.path.basename(m.GetProp('_Name')) for m in ms]),
                                               time.strftime('%H%M%S_%d%m%Y')), 'w') as fh:
             fh.write(img)
@@ -1284,73 +1343,122 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.3, num_conformers=50, random
 
     # Prepare a MCS ignoring chirality. This will guide the selection of atoms viable to be included in the final MCS
     kwargs.update(matchChiralTag=False)
-    achiral_mcs = find_mcs([molecule_a, molecule_b], savestate=savestate, **kwargs)
+    achiral_mcs = find_mcs([molecule_a, molecule_b], savestate=None, **kwargs)
     os_util.local_print('Achiral MCS: {}'.format(achiral_mcs.smartsString),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     achiral_mcs_mol = rdkit.Chem.MolFromSmarts(achiral_mcs.smartsString)
 
-    achiral_match_a = molecule_a.GetSubstructMatch(achiral_mcs_mol)
-    achiral_match_b = molecule_a.GetSubstructMatch(achiral_mcs_mol)
+    achiral_matches_a = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=achiral_mcs_mol,
+                                                       verbosity=verbosity)
+    achiral_matches_b = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=achiral_mcs_mol,
+                                                       verbosity=verbosity)
 
-    mcs = find_mcs([molecule_a, molecule_b], savestate=savestate, matchChiralTag=True)
+    mcs = find_mcs([molecule_a, molecule_b], savestate=None, matchChiralTag=True)
     os_util.local_print('First chiral MCS: {}'.format(mcs.smartsString),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     mcs_history = [rdkit.Chem.MolFromSmarts(mcs.smartsString)]
     while True:
-        m1_match = molecule_a.GetSubstructMatch(mcs_history[-1])
-        m2_match = molecule_b.GetSubstructMatch(mcs_history[-1])
+        # Try every possible match between the current MCS and each of the molecules
+        m1_matches = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=mcs_history[-1],
+                                                    verbosity=verbosity)
+        m2_matches = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=mcs_history[-1],
+                                                    verbosity=verbosity)
 
-        match = {a: b for a, b in sorted(zip(m1_match, m2_match))}
+        best_matches = None
+        for (m1_match, m2_match) in itertools.product(m1_matches, m2_matches):
+            match = {a: b for a, b in sorted(zip(m1_match, m2_match))}
 
-        coord_map = {endpoint_atom: molecule_b.GetConformer().GetAtomPosition(target_atom)
-                     for target_atom, endpoint_atom in match.items()}
+            coord_map = {endpoint_atom: molecule_a.GetConformer().GetAtomPosition(target_atom)
+                         for target_atom, endpoint_atom in match.items()}
+            # with open('coords.xyz', 'w') as fh:
+            #     fh.write(f'{len(coord_map)}\n\n')
+            #     fh.writelines([f'{molecule_b.GetAtomWithIdx(a).GetSymbol():<10} {c.x:<10} {c.y:<10} {c.z:<10}\n'
+            #                    for a, c in coord_map.items()])
 
-        rdkit.Chem.AllChem.EmbedMultipleConfs(molecule_a, maxAttempts=50, numConfs=num_conformers,
-                                              randomSeed=randomseed, useRandomCoords=True, clearConfs=False,
-                                              coordMap=coord_map, ignoreSmoothingFailures=True, enforceChirality=True,
-                                              numThreads=num_threads)
-
-        mcs_candidate = None
-        for each_conf in molecule_a.GetConformers():
-            this_core_mol = rdkit.Chem.RWMol(achiral_mcs_mol)
-            include_atoms = []
-            for core_atom, (idx1, idx2) in enumerate(zip(achiral_match_a, achiral_match_b)):
-                delt = each_conf.GetAtomPosition(idx1) - molecule_b.GetConformer().GetAtomPosition(idx2)
-                if delt.Length() <= tolerance:
-                    include_atoms.append(core_atom)
-
-            if not include_atoms:
+            # Get multiple conformations subject to the constraints
+            confs = rdkit.Chem.AllChem.EmbedMultipleConfs(molecule_b, maxAttempts=50, numConfs=num_conformers,
+                                                          randomSeed=randomseed, useRandomCoords=True,
+                                                          clearConfs=False, coordMap=coord_map,
+                                                          ignoreSmoothingFailures=True, enforceChirality=True,
+                                                          numThreads=num_threads)
+            if len(confs) == 0:
+                os_util.local_print('EmbedMultipleConfs failed to generate conformations using the following atom '
+                                    'matches: {}.'
+                                    ''.format(match),
+                                    msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
                 continue
 
-            [this_core_mol.RemoveAtom(atom_idx) for atom_idx in reversed(range(this_core_mol.GetNumAtoms()))
-             if atom_idx not in include_atoms]
+            os_util.local_print('Done with EmbedMultipleConfs, {} confs generated (max = {}). {} out of {} atoms were '
+                                'constrainded.'
+                                ''.format(len(confs), num_conformers, len(coord_map), molecule_b.GetNumAtoms()),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-            core_fragments = GetMolFrags(this_core_mol, asMols=True)
-            largest_fragment = max(core_fragments, default=core_fragments, key=lambda m: m.GetNumAtoms())
+            # Now iterate over the conformations searching for largest matches
+            mcs_candidate = None
+            for n_conf, each_conf in enumerate(confs):
+                best_include_atoms = []
+                for achiral_match_a, achiral_match_b in itertools.product(achiral_matches_a, achiral_matches_b):
+                    include_atoms = []
+                    for core_atom, (idxa, idxb) in enumerate(zip(achiral_match_a, achiral_match_b)):
+                        delt = molecule_b.GetConformer(each_conf).GetAtomPosition(idxb) \
+                               - molecule_a.GetConformer().GetAtomPosition(idxa)
+                        if delt.Length() <= tolerance:
+                            include_atoms.append(core_atom)
+                    if len(best_include_atoms) < len(include_atoms):
+                        best_include_atoms = include_atoms
+
+                os_util.local_print('Conformation {}: {} matching atoms'
+                                    ''.format(n_conf, len(include_atoms)),
+                                    msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+
+                if not include_atoms or len(include_atoms) < 3:
+                    continue
+
+                this_core_mol = rdkit.Chem.RWMol(achiral_mcs_mol)
+                [this_core_mol.RemoveAtom(atom_idx) for atom_idx in reversed(range(this_core_mol.GetNumAtoms()))
+                 if atom_idx not in include_atoms]
+
+                core_fragments = GetMolFrags(this_core_mol, asMols=True)
+                largest_fragment = max(core_fragments, default=core_fragments, key=lambda m: m.GetNumAtoms())
+                if mcs_candidate is None:
+                    mcs_candidate = largest_fragment
+                elif mcs_candidate.GetNumAtoms() < largest_fragment.GetNumAtoms():
+                    mcs_candidate = largest_fragment
             if mcs_candidate is None:
-                mcs_candidate = largest_fragment
-            elif mcs_candidate.GetNumAtoms() < largest_fragment.GetNumAtoms():
-                mcs_candidate = largest_fragment
+                continue
+            if mcs_candidate.GetNumAtoms() < mcs_history[-1].GetNumAtoms():
+                continue
 
-        mcs_history.append(mcs_candidate)
-        os_util.local_print('Iteration {} MCS: {} ({} atoms)'
-                            ''.format(len(mcs_history), rdkit.Chem.MolToSmiles(mcs_candidate),
-                                      mcs_candidate.GetNumAtoms()),
-                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-        if len(mcs_history) >= 2 and mcs_history[-1].GetNumAtoms() == mcs_history[-2].GetNumAtoms():
+            mcs_history.append(mcs_candidate)
+            os_util.local_print('Iteration {} MCS: {} ({} atoms)'
+                                ''.format(len(mcs_history), rdkit.Chem.MolToSmiles(mcs_candidate),
+                                          mcs_candidate.GetNumAtoms()),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+            if best_matches is None or mcs_history[-1].GetNumAtoms() > best_matches['num_atoms']:
+                best_matches = {'matching_atoms': match,
+                                'num_atoms': mcs_history[-1].GetNumAtoms(),
+                                'num_bonds': mcs_history[-1].GetNumBonds(),
+                                'smarts_string': rdkit.Chem.MolToSmiles(mcs_history[-1])}
+
+        if len(mcs_history) == 1:
+            os_util.local_print('find_mcs_3d failed to obtain an 3D-based MCS for molecules molecule_a={} (SMILES={}), '
+                                'and molecule_b={} (SMILES={}).'
+                                ''.format(molecule_a, rdkit.Chem.MolToSmiles(molecule_a), molecule_b,
+                                          rdkit.Chem.MolToSmiles(molecule_b)),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(-1)
+
+        elif len(mcs_history) >= 2 and mcs_history[-1].GetNumAtoms() == mcs_history[-2].GetNumAtoms():
             os_util.local_print('Solution found. MCS atoms per iteration: {}'
                                 ''.format(', '.join(['{}: {}'.format(i, m.GetNumAtoms())
                                                      for i, m in enumerate(mcs_history)])),
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             break
 
-    rdkit.Chem.MolToPDBFile(molecule_a, 'mola.pdb')
-    rdkit.Chem.MolToPDBFile(molecule_b, 'molb.pdb')
-
-    mcs_result = all_classes.MCSResult(rdkit.Chem.MolToSmiles(mcs_history[-1]), num_atoms=mcs_history[-1].GetNumAtoms(),
-                                       num_bonds=mcs_history[-1].GetNumBonds(), canceled=False)
+    mcs_result = all_classes.MCSResult(best_matches['smarts_string'], num_atoms=best_matches['num_atoms'],
+                                       num_bonds=best_matches['num_bonds'], canceled=False)
 
     if savestate:
         savestate['3dmcs_dict'][mols_frozenset] = mcs_result
@@ -1412,3 +1520,74 @@ def get_substruct_matches_fallback(reference_mol, core_mol, die_on_error=True, v
                     return False
 
     return matches
+
+
+def get_atom_map(molecule_a, molecule_b, core_mol, min_atom_map=None, multiple_matches=False, verbosity=0):
+    """Uses GetSubstructMatches to select an atom map between atoms of molecules A and B belonging to the common-core
+    represented by core_mol. atom_map, if supplied, will be use to select between possible multiple matches between A
+    and B.
+
+    Parameters
+    ----------
+    molecule_a : rdkit.Chem.Mol
+        molecule A
+    molecule_b : rdkit.Chem.Mol
+        molecule B
+    core_mol : rdkit.Chem.Mol
+        molecule representing the common-core between molecules a and b
+    min_atom_map : tuple
+        if supplied, only an atom map containing all atom pairs in this min_atom_map will be returned, must be a
+        iterable of tuples or lists
+    multiple_matches : bool
+        if min_atom_map=None, return all combinations of matching atoms between A and B
+    verbosity : int
+        sets the verbosity level
+
+    Returns
+    -------
+    list
+        The A->B atom map, as a list of lists of [atom_a, atom_b]
+
+    Raises
+    ------
+    KeyError
+        In case min_atom_map is given and it cannot be found in any of the combination of the matches, a KeyError will
+        be raised
+    """
+
+    core_mol = mol_util.adjust_query_properties(core_mol, verbosity=verbosity)
+    matches_a = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=core_mol, verbosity=verbosity)
+    matches_b = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=core_mol, verbosity=verbosity)
+    if min_atom_map is not None:
+        for each_match_a, each_match_b in itertools.product(matches_a, matches_b):
+            common_atoms = list(zip(each_match_a, each_match_b))
+            if set(common_atoms).issuperset(set(min_atom_map)):
+                os_util.local_print('Atom map {} used to select the atom matches between molecules {} and {} (MCS={}). '
+                                    'The following match was selected: {}\nThe following matches were obtained:\n{}'
+                                    ''.format(min_atom_map,
+                                              molecule_a.GetProp("_Name"), molecule_b.GetProp("_Name"),
+                                              rdkit.Chem.MolToSmarts(core_mol), common_atoms,
+                                              '\n'.join([str(list(zip(a, b))) for a, b in
+                                                         itertools.product(matches_a, matches_b)])),
+                                    msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+
+                break
+        else:
+            os_util.local_print('Atom map {} not found within any of the matches between molecules {} and {} (MCS={}). '
+                                'The following matches were obtained:\n{}'
+                                ''.format(min_atom_map, molecule_a.GetProp("_Name"), molecule_b.GetProp("_Name"),
+                                          rdkit.Chem.MolToSmarts(core_mol),
+                                          '\n'.join([str(list(zip(a, b)))
+                                                     for a, b in itertools.product(matches_a, matches_b)]),
+                                          msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity))
+            raise KeyError
+
+    else:
+        if multiple_matches:
+            matches_a = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=core_mol, verbosity=verbosity)
+            matches_b = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=core_mol, verbosity=verbosity)
+            common_atoms = [list(zip(a, b)) for a, b in itertools.product(matches_a, matches_b)]
+        else:
+            common_atoms = list(zip(molecule_a.GetSubstructMatch(core_mol),
+                                    molecule_b.GetSubstructMatch(core_mol)))
+    return common_atoms

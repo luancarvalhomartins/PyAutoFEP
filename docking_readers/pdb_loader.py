@@ -118,7 +118,7 @@ def extract_pdb_poses(poses_data, reference_structure, ligand_residue_name='LIG'
                     lig_residue = each_res
                     break
             else:
-                # For was not break, we did not find ligand_name
+                # For was not broken, we did not find ligand_name
                 os_util.local_print('Could not find ligand molecule {} in file {} using the residue name {}. I have '
                                     'read the following residues: {}\n'
                                     ''.format(ligand_name, ligand_dict, lig_residue,

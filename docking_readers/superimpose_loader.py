@@ -45,6 +45,7 @@ def superimpose_poses(ligand_data, reference_pose_mol, save_state=None, num_thre
 
     # Set default to no MCS
     kwargs.setdefault('mcs', None)
+    kwargs.setdefault('superimpose_atom_map', {})
 
     # Test for data from a previous run
     if save_state:
@@ -88,6 +89,9 @@ def superimpose_poses(ligand_data, reference_pose_mol, save_state=None, num_thre
         rdkit_reference_pose = extract_docking_poses({'reference': {'molecule': reference_pose_mol}},
                                                      verbosity=verbosity)['reference']
 
+    if not rdkit_reference_pose.HasProp('_Name'):
+        rdkit_reference_pose.SetProp('_Name', '<Superimpose reference pose>')
+
     # Extract data from ligands
     docking_poses_data = extract_docking_poses(ligand_data, verbosity=verbosity)
     new_docking_poses_data = {}
@@ -114,10 +118,13 @@ def superimpose_poses(ligand_data, reference_pose_mol, save_state=None, num_thre
                                     msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
                 continue
 
+        # Tries to find a custom atom match from the atom_map input. Note that
+        this_atommap = kwargs['superimpose_atom_map'].get(ligand_name, None)
+
         thismol = merge_topologies.constrained_embed_shapeselect(each_ligand_mol, rdkit_reference_pose,
                                                                  num_threads=num_threads, save_state=save_state,
                                                                  num_conformers=num_conformers, verbosity=verbosity,
-                                                                 **kwargs)
+                                                                 atom_map=this_atommap, **kwargs)
         new_docking_poses_data[ligand_name] = thismol
 
         if save_state:

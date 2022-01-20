@@ -921,6 +921,33 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                         temp_mol.SetProp('_Name', each_name)
 
+                    # Some checks for the ligand input
+                    if not no_checks:
+                        if len(rdkit.Chem.GetMolFrags(temp_mol)) > 1:
+                            os_util.local_print('Molecule {} ({}) has {} fragments, which is not supported. Make sure '
+                                                'the input file corresponds to a valid 3D structure.'
+                                                ''.format(temp_mol.GetProp('_Name'), each_field,
+                                                          len(rdkit.Chem.GetMolFrags(temp_mol))),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise ValueError('Molecules with multiple fragments not supported.')
+                        if temp_mol.GetNumConformers() != 1:
+                            os_util.local_print('Molecule {} ({}) has {} conformers, which is not supported (ie, only '
+                                                'the first conformation will be used). Make sure the input file '
+                                                'corresponds to a single valid 3D structure.'
+                                                ''.format(temp_mol.GetProp('_Name'), each_field,
+                                                          temp_mol.GetNumConformers()),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise ValueError('Molecules having several conformers or no conformers are not supported.')
+                        if not mol_util.has_3d(temp_mol):
+                            os_util.local_print('Molecule {} ({}) has no 3D coordinates, which is not supported. Make '
+                                                'sure the input file corresponds to a valid 3D structure.'
+                                                ''.format(temp_mol.GetProp('_Name'), each_field),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise ValueError('Molecules having no 3D coordinates not supported.')
+
                     new_dict['molecule'] = temp_mol
                 elif this_ext == '.pdb':
                     if not no_checks:
@@ -947,7 +974,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                     # Unknown extension, but I will assume it's a topology file anyway
                     os_util.local_print('Unknown file extension for {}, assuming it is a GROMACS-compatible topology '
                                         'file.'.format(each_field),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                                        msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                     new_dict.setdefault('topology', []).append(each_field)
             ligand_dict[each_name] = new_dict
         else:
@@ -2654,9 +2681,8 @@ if __name__ == '__main__':
                         help='Use this/these custom MCS between pairs. Can be either a string (so the same MCS '
                              'will be used for all pairs) or a dictionary (only pairs present in dictionary will use '
                              'a custom MCS)')
-    # TODO: implement this
-    # Parser.add_argument('--mcs_custom_atommap', type=str, default=None,
-    #                     help='Use these custom atoms map between pairs.')
+    Parser.add_argument('--mcs_custom_atommap', type=str, default=None,
+                        help='Use these custom atoms map between pairs.')
 
     poses_loader = Parser.add_argument_group('poses_loader', 'Options related to the loading of initial ligand poses')
     poses_loader.add_argument('--poses_input', type=str, default=None,
@@ -2828,6 +2854,14 @@ if __name__ == '__main__':
                                 current_verbosity=arguments.verbose)
             raise SystemExit(1)
 
+    arguments.mcs_custom_atommap = os_util.detect_type(arguments.mcs_custom_atommap, test_for_dict=True)
+    if arguments.mcs_custom_atommap is not None and not isinstance(arguments.mcs_custom_atommap, dict):
+        os_util.local_print('Error while processing mcs_custom_atommap argument or option. It must be a dict relating '
+                            'ligand pair names and atom maps. Data read from mcs_custom_atommap was {}. See manual for '
+                            'futher info.'.format(arguments.mcs_custom_atommap),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+        raise TypeError()
+
     arguments.mcs_custom_mcs = os_util.detect_type(arguments.mcs_custom_mcs, test_for_list=True)
     if arguments.mcs_custom_mcs is None:
         custom_mcs_data = None
@@ -2849,13 +2883,13 @@ if __name__ == '__main__':
                                 'mol3_name, mol4_name, mcs_b". Please, see the manual. Data read from mcs_custom_mcs '
                                 'was {}'.format(arguments.mcs_custom_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-            raise SystemExit(-1)
+            raise ValueError()
     else:
         os_util.local_print('Could not understand the mcs_custom_mcs argument or option. List or string expected, but '
                             'type {} found. Data read was {}. Please, see the manual.'
                             ''.format(type(arguments.mcs_custom_mcs), arguments.mcs_custom_mcs),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-        raise SystemExit(-1)
+        raise TypeError()
 
     if arguments.output_packing not in ['bin', 'dir', 'tgz']:
         os_util.local_print('Packing {} not recognized, please, select between "bin", "tgz" or "dir"',
@@ -3255,13 +3289,26 @@ if __name__ == '__main__':
                                 'your input. mcs_custom_mcs is "{}"'.format(arguments.mcs_custom_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
             raise SystemExit(-1)
+
+        mcs_custom_atommap = None
+        # Tries to find a custom atom match from the input
+        if arguments.mcs_custom_atommap is not None:
+            if tuple(morph_pair) in arguments.mcs_custom_atommap:
+                mcs_custom_atommap = arguments.mcs_custom_atommap[tuple(morph_pair)]
+            elif tuple(morph_pair[1], morph_pair[0]) in arguments.mcs_custom_atommap:
+                # The mapping of A->B was not found, but B->A was, reverse and use it
+                mcs_custom_atommap = [(j, i) for i, j in
+                                      arguments.mcs_custom_atommap[tuple(morph_pair[1], morph_pair[0])]]
+
         # From individual files, prepare a dual topology molecule and topology
         merged_data = merge_topologies.merge_topologies(ligands_dict[state_a_name]['molecule'],
                                                         ligands_dict[state_b_name]['molecule'],
                                                         ligands_dict[state_a_name]['topology'],
                                                         ligands_dict[state_b_name]['topology'],
                                                         savestate=progress_data, no_checks=arguments.no_checks,
-                                                        mcs=this_custom_mcs, verbosity=arguments.verbose)
+                                                        mcs=this_custom_mcs, mcs_type=arguments.mcs_type,
+                                                        atom_map=mcs_custom_atommap, num_threads=arguments.threads,
+                                                        verbosity=arguments.verbose)
 
         if 'lambda' in perturbation_map[tuple(morph_pair)]:
             this_lambda_table = process_lambdas_input(perturbation_map[tuple(morph_pair)]['lambda'],

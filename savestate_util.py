@@ -174,10 +174,13 @@ class SavableState(Namespace):
         from rdkit.Chem.AllChem import Compute2DCoords
 
         this_mol = self.ligands_data[mol_name]['molecule']
-        if 'images' not in self.ligands_data[mol_name]:
+        self.ligands_data[mol_name].setdefault('images', {})
+
+        if not {'2d_hs', '2d_nohs'}.issubset(self.ligands_data[mol_name]['images']):
             draw_2d_svg = MolDraw2DSVG(300, 300)
             temp_mol = rdkit.Chem.Mol(this_mol)
             Compute2DCoords(temp_mol)
+            draw_2d_svg.drawOptions().addStereoAnnotation=True
             draw_2d_svg.DrawMolecule(temp_mol)
             draw_2d_svg.FinishDrawing()
             svg_data_hs = draw_2d_svg.GetDrawingText()
@@ -189,8 +192,84 @@ class SavableState(Namespace):
             draw_2d_svg.FinishDrawing()
             svg_data_no_hs = draw_2d_svg.GetDrawingText()
 
-            self.ligands_data[mol_name]['images'] = {'2d_hs': svg_data_hs, '2d_nohs': svg_data_no_hs}
-        if not save:
+            self.ligands_data[mol_name]['images'].update({'2d_hs': svg_data_hs, '2d_nohs': svg_data_no_hs})
+
+        if save:
+            self.save_data()
+
+    def update_pertubation_image(self, mol_a_name, mol_b_name, core_smarts=None, save=False, verbosity=0, **kwargs):
+        """ Generate mol images describing a pertubation between the ligand pair
+
+        :param str mol_a_name: name of the molecule A
+        :param str mol_b_name: name of the molecule B
+        :param str core_smarts: use this smarts as common core
+        :param bool save: automatically save data
+        :param int verbosity: controls verbosity level
+        """
+        # verbosity = 5
+
+        self.ligands_data[mol_a_name].setdefault('images', {})
+        self.ligands_data[mol_a_name]['images'].setdefault('perturbations', {})
+        self.ligands_data[mol_b_name].setdefault('images', {})
+        self.ligands_data[mol_b_name]['images'].setdefault('perturbations', {})
+
+        import rdkit.Chem
+        this_mol_a = rdkit.Chem.Mol(self.ligands_data[mol_a_name]['molecule'])
+        this_mol_b = rdkit.Chem.Mol(self.ligands_data[mol_b_name]['molecule'])
+
+        if core_smarts is None:
+            # Get core_smarts using find_mcs
+            from merge_topologies import find_mcs
+            this_mol_a.RemoveAllConformers()
+            this_mol_b.RemoveAllConformers()
+            core_smarts = find_mcs([this_mol_a, this_mol_b], savestate=self, verbosity=verbosity, **kwargs).smartsString
+
+        try:
+            # Test whether the correct data structure is already present
+            assert len(self.ligands_data[mol_a_name]['images']['perturbations'][mol_b_name][core_smarts]) > 0
+            assert len(self.ligands_data[mol_b_name]['images']['perturbations'][mol_a_name][core_smarts]) > 0
+        except (KeyError, AssertionError):
+            # It isn't, go on and create the images
+            os_util.local_print('Perturbation images for molecules {} and {} with common core "{}" were not found. '
+                                'Generating it.'.format(mol_a_name, mol_b_name, core_smarts),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        else:
+            return None
+
+        from rdkit.Chem.Draw import MolDraw2DSVG
+        from rdkit.Chem.AllChem import Compute2DCoords, GenerateDepictionMatching2DStructure
+
+        core_mol = rdkit.Chem.MolFromSmarts(core_smarts)
+        Compute2DCoords(core_mol)
+
+        for each_name, each_mol, other_mol in zip([mol_a_name, mol_b_name],
+                                                  [this_mol_a, this_mol_b],
+                                                  [mol_b_name, mol_a_name]):
+            GenerateDepictionMatching2DStructure(each_mol, core_mol, acceptFailure=True)
+
+            # Draw mol with hydrogens
+            draw_2d_svg = MolDraw2DSVG(300, 150)
+            draw_2d_svg.drawOptions().addStereoAnnotation = True
+            not_common_atoms = [i.GetIdx() for i in each_mol.GetAtoms()
+                                if i.GetIdx() not in each_mol.GetSubstructMatch(core_mol)]
+            draw_2d_svg.DrawMolecule(each_mol, legend=each_name, highlightAtoms=not_common_atoms)
+            draw_2d_svg.FinishDrawing()
+            svg_data_hs = draw_2d_svg.GetDrawingText()
+
+            # Draw mol without hydrogens
+            draw_2d_svg = MolDraw2DSVG(300, 150)
+            draw_2d_svg.drawOptions().addStereoAnnotation = True
+            each_mol = rdkit.Chem.RemoveHs(each_mol)
+            not_common_atoms = [i.GetIdx() for i in each_mol.GetAtoms()
+                                if i.GetIdx() not in each_mol.GetSubstructMatch(rdkit.Chem.RemoveHs(core_mol))]
+            draw_2d_svg.DrawMolecule(each_mol, legend=each_name, highlightAtoms=not_common_atoms)
+            draw_2d_svg.FinishDrawing()
+            svg_data_nohs = draw_2d_svg.GetDrawingText()
+
+            perturbation_imgs = self.ligands_data[each_name]['images']['perturbations']
+            perturbation_imgs.setdefault(other_mol, {})[core_smarts] = {'2d_hs': svg_data_hs, '2d_nohs': svg_data_nohs}
+
+        if save:
             self.save_data()
 
 

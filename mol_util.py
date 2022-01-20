@@ -535,3 +535,28 @@ def loose_replace_side_chains(mol, core_query, use_chirality=False, verbosity=Tr
             result_core_structure = rdkit.Chem.ReplaceSidechains(mol, temp_core_mol, useChirality=use_chirality)
 
     return result_core_structure
+
+
+def has_3d(temp_mol, conf_id=-1, tolerance=1e-5, verbosity=0):
+    """Check if molecules has 3D coordinates. Based upon OpenBabel OBMol::Has3D()
+
+    Parameters
+    ----------
+    temp_mol : rdkit.Chem.Mol
+        Molecule to be checked.
+    conf_id : int
+        Test 3D for this conformation.
+    tolerance : float
+        Tolerance, in angstroms, for a value to be taken as not null.
+    verbosity : int
+        Sets the verbosity level.
+
+    Returns
+    -------
+    bool
+        True if molecule has 3D coordinates, False otherwise.
+    """
+
+    positions_array = temp_mol.GetConformer(conf_id).GetPositions()
+    print(positions_array)
+    return not numpy.allclose(positions_array, 0.0, atol=tolerance, rtol=0.0)
