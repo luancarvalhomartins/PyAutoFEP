@@ -217,22 +217,22 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
                 sys.stderr = alchemlyb_stdout
                 try:
                     estimator_obj.fit(subsampled_u_nk_after_first)
-                except BaseException as error:
+                except BaseException as this_error:
                     sys.stdout = sys.__stdout__
                     sys.stderr = sys.__stderr__
                     if not no_checks:
                         os_util.local_print('Error while running estimator {}. Error was: {}.\n{}'
-                                            ''.format(name, error, alchemlyb_stdout.getvalue()),
+                                            ''.format(name, this_error, alchemlyb_stdout.getvalue()),
                                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                         if threading.current_thread() is threading.main_thread():
                             # Use os._exit to halt execution from from a thread
                             os._exit(1)
                         else:
-                            raise SystemExit(1)
+                            raise this_error
                     else:
                         os_util.local_print('Error while running estimator {}. Because you are running with no_checks, '
                                             'I will try to go on. Error was: {}.'
-                                            ''.format(name, error),
+                                            ''.format(name, this_error),
                                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 finally:
                     sys.stdout = sys.__stdout__
@@ -256,8 +256,15 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
 
                     try:
                         overlap_matrix = estimator_obj._mbar.computeOverlap()['matrix']
-                    except KeyError:
-                        overlap_matrix = estimator_obj._mbar.computeOverlap()[2]
+                    except (KeyError, TypeError):
+                        try:
+                            overlap_matrix = estimator_obj._mbar.computeOverlap()[2]
+                        except (KeyError, TypeError) as this_error:
+                            os_util.local_print('Failed to understand states overlap data in _mbar.computeOverlap. '
+                                                'Please, check you alchemlyb and pymbar versions and installations.',
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise this_error
 
                     sys.stdout = sys.__stdout__
                     sys.stderr = sys.__stderr__
