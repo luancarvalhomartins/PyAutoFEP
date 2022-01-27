@@ -93,11 +93,19 @@ def rwmol_to_obmol(rdkit_rwmol, verbosity=0):
 
 
 def obmol_to_rwmol(openbabel_obmol, verbosity=0):
-    """ Converts a openbabel.OBMol to rdkit.RWMol
+    """Converts a openbabel.OBMol to rdkit.RWMol
 
-    :param pybel.ob.OBMol openbabel_obmol: the OBMol to be converted
-    :param int verbosity: be verbosity
-    :rtype: rdkit.Chem.Mol
+    Parameters
+    ----------
+    openbabel_obmol : pybel.ob.OBMol
+        The OBMol to be converted
+    verbosity : int
+        Sets verbosity level
+
+    Returns
+    -------
+    rdkit.Chem.Mol
+        Converted molecule
     """
 
     import pybel
@@ -115,11 +123,6 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                             ''.format(openbabel_obmol, type(openbabel_obmol)),
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
         raise ValueError('pybel.Molecule or pybel.ob.OBMol expected, got {} instead'.format(type(openbabel_obmol)))
-
-    os_util.local_print('Entering obmol_to_rwmol(openbabel_obmol=(SMILES:{}; Title: {}), verbosity={})'
-                        ''.format(pybel.Molecule(openbabel_obmol).write('smi'), openbabel_obmol.GetTitle(),
-                                  verbosity),
-                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
     # Set some lookups
     _bondtypes = {0: rdkit.Chem.BondType.UNSPECIFIED,
@@ -139,9 +142,9 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
     try:
         residue_iter = pybel.ob.OBResidueIter(openbabel_obmol).__next__()
     except StopIteration:
-        if verbosity > 0:
-            print('[WARNING] Could not read atom names from molecule "{}" (Smiles: {})'
-                  ''.format(openbabel_obmol.GetTitle(), pybel.Molecule(openbabel_obmol).write('smi')))
+        os_util.local_print('Could not read atom names from molecule "{}" (Smiles: {})'
+                            ''.format(openbabel_obmol.GetTitle(), pybel.Molecule(openbabel_obmol).write('smi')),
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.warning)
         residue_iter = None
 
     # Assign atoms
@@ -151,15 +154,17 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                 and each_atom.GetAtomicMass() == 0:
             dummy_atoms.add(index)
             rdatom = rdkit.Chem.MolFromSmarts('*').GetAtomWithIdx(0)
-            if verbosity > 1:
-                print('[INFO] Atom {} was detected as a lone pair because of its name {} and its mass {}'
-                      ''.format(index, residue_iter.GetAtomID(each_atom), each_atom.GetAtomicMass()))
+            os_util.local_print('Atom {} was detected as a lone pair because of its name {} and its mass {}'
+                                ''.format(index, residue_iter.GetAtomID(each_atom), each_atom.GetAtomicMass()),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
+
         elif residue_iter is None and each_atom.GetAtomicMass() == 0:
             dummy_atoms.add(index)
             rdatom = rdkit.Chem.MolFromSmarts('*').GetAtomWithIdx(0)
-            if verbosity > 1:
-                print('[INFO] Atom {} was detected as a lone pair because of its mass {} (Note: it was not possible to '
-                      'read atom name)'.format(index, residue_iter.GetAtomID(each_atom), each_atom.GetAtomicMass()))
+            os_util.local_print('Atom {} was detected as a lone pair because of its mass {} (Note: it was not possible '
+                                'to read atom name)'
+                                ''.format(index, residue_iter.GetAtomID(each_atom), each_atom.GetAtomicMass()),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
 
         else:
             rdatom = rdkit.Chem.Atom(each_atom.GetAtomicNum())
@@ -170,8 +175,8 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
         if each_atom.IsAromatic():
             rdedmol.GetAtomWithIdx(new_atom).SetIsAromatic(True)
 
-    if verbosity > 2:
-        print('[DEBUG] These are the dummy atoms detected: dummy_atoms={}'.format(dummy_atoms))
+        os_util.local_print('[DEBUG] These are the dummy atoms detected: dummy_atoms={}'.format(dummy_atoms),
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
     # Assing bonds
     for each_bond in pybel.ob.OBMolBondIter(openbabel_obmol):
@@ -184,24 +189,24 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                                         each_bond.GetEndAtomIdx() - 1).SetBondType(_bondtypes[5])
 
         # This bond contains a dummy atom, converting bond to a UNSPECIFIED
-        if dummy_atoms.intersection(set([each_bond.GetBeginAtomIdx()-1, each_bond.GetEndAtomIdx()-1])):
+        if dummy_atoms.intersection({each_bond.GetBeginAtomIdx() - 1, each_bond.GetEndAtomIdx() - 1}):
             rdedmol.GetBondBetweenAtoms(each_bond.GetBeginAtomIdx() - 1,
                                         each_bond.GetEndAtomIdx() - 1).SetBondType(_bondtypes[0])
-            if verbosity > 1:
-                print('[INFO] Bond between atoms {} and {} converted to an UNSPECIFIED type'
-                      ''.format(each_bond.GetBeginAtomIdx()-1, each_bond.GetEndAtomIdx()-1))
+        os_util.local_print('Bond between atoms {} and {} converted to an UNSPECIFIED type'
+                            ''.format(each_bond.GetBeginAtomIdx()-1, each_bond.GetEndAtomIdx()-1),
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
     # FIXME: assign stereochemistry
 
     rdmol = rdedmol.GetMol()
 
     # Copy coordinates, first generate at least one conformer
-    rdkit.Chem.AllChem.EmbedMolecule(rdmol, useRandomCoords=True, maxAttempts=1000, enforceChirality=True, )
+    rdkit.Chem.AllChem.EmbedMolecule(rdmol, useRandomCoords=True, maxAttempts=1000, enforceChirality=True,
+                                     ignoreSmoothingFailures=True)
     if rdmol.GetNumConformers() != 1:
-        print('[ERROR] Failed to generate coordinates to molecule')
-        if verbosity >= 0:
-            print(pybel.Molecule(openbabel_obmol).write('smi'))
-        raise SystemExit(1)
+        os_util.local_print('Failed to generate coordinates to molecule',
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+        raise ValueError
 
     for atom_rdkit, atom_obmol in zip(rdmol.GetAtoms(), pybel.ob.OBMolAtomIter(openbabel_obmol)):
         this_position = rdkit.Geometry.rdGeometry.Point3D()
@@ -225,17 +230,16 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
         rdmol = rdedmol.GetMol()
         rdkit.Chem.SanitizeMol(rdmol)
 
-        if verbosity > 0:
-            print('[WARNING] Atom id: {} is not explicitly bonded to any atom in molecule, connecting it to the '
-                  'closer atom id: {}'
-                  ''.format(each_atom.GetIdx(), closer_atom))
+        os_util.local_print('Atom id: {} is not explicitly bonded to any atom in molecule, connecting it to the closer '
+                            'atom id: {}'.format(each_atom.GetIdx(), closer_atom),
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.warning)
 
     rdkit.Chem.SanitizeMol(rdmol)
 
-    if verbosity > 1:
-        print("[INFO] obmol_to_rwmol converted molecule {} (name: {}). Pybel SMILES: {} to rdkit SMILES: {}"
-              "".format(openbabel_obmol, openbabel_obmol.GetTitle(),
-                        pybel.Molecule(openbabel_obmol).write('smi'), rdkit.Chem.MolToSmiles(rdedmol)))
+    os_util.local_print("obmol_to_rwmol converted molecule {} (name: {}). Pybel SMILES: {} to rdkit SMILES: {}"
+                        "".format(openbabel_obmol, openbabel_obmol.GetTitle(),
+                                  pybel.Molecule(openbabel_obmol).write('smi'), rdkit.Chem.MolToSmiles(rdedmol)),
+                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
     return rdmol
 
@@ -558,5 +562,4 @@ def has_3d(temp_mol, conf_id=-1, tolerance=1e-5, verbosity=0):
     """
 
     positions_array = temp_mol.GetConformer(conf_id).GetPositions()
-    print(positions_array)
     return not numpy.allclose(positions_array, 0.0, atol=tolerance, rtol=0.0)
