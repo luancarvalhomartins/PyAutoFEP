@@ -72,7 +72,7 @@ def guess_water_box(solvent_box, pdb2gmx_topology='', verbosity=0):
                                                                           'Cannot continue. Verify the system '
                                                                           'builder intermediate files in {}'
                                                                           ''.format(build_base_dir),
-                                                             return_as_list=True, verbosity=verbosity)
+                                                            return_as_list=True, verbosity=verbosity)
         try:
             water_topology = pdb2gmx_topology_data[pdb2gmx_topology_data.index('; Include water topology\n') + 1]
         except ValueError:
@@ -1151,18 +1151,15 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
     :param int verbosity: be verbosity
     """
 
-    os_util.local_print('Entering read_md_protein(structure_file={}, structure_format={}, last_protein_atom={}, '
-                        'verbosity={})'.format(structure_file, structure_format, last_protein_atom, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-
     if structure_format == '':
-        structure_format = structure_file.split('.')[-1]
-
-    protein_data = os_util.read_file_to_buffer(structure_file, die_on_error=True, return_as_list=True,
-                                               error_message='Failed to read the system file {}. Cannot continue. '
-                                                             'Please, use the structure option'
-                                                             ''.format(structure_file),
-                                               verbosity=verbosity)
+        structure_format = os.path.splitext(structure_file)[-1]
+    if structure_format not in ['.pdb', '.pdbqt']:
+        os_util.local_print('Currently, only PDB and PDB-compatible formats are supported.'
+                            ''.format(structure_file, structure_format),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+        raise ValueError
+    else:
+        structure_format = structure_format[1:]
 
     if last_protein_atom == -1:
         protein_data = pybel.readstring(structure_format, structure_file)
@@ -1170,12 +1167,24 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
     else:
         # TODO: proper handling of the protein selection
 
-        test_atom = int(protein_data[last_protein_atom][6:11])
-        shift_lines = last_protein_atom - test_atom
-        protein_data = ''.join(protein_data[:last_protein_atom + shift_lines + 1])
+        protein_data = all_classes.PDBFile(input_file=structure_file)
+        output_data = []
+        for each_line in protein_data.file_lines:
+            if isinstance(each_line, all_classes.PDBFile.PDBAtom):
+                output_data.append(each_line.to_line())
+                if each_line == protein_data.atoms[last_protein_atom-1]:
+                    break
+            else:
+                output_data.append(each_line)
+        else:
+            os_util.local_print('Last atom of the protein, atom {}, not found in structure file {}. Cannot go on.'
+                                ''.format(last_protein_atom, structure_file),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise ValueError
+        protein_data = ''.join(output_data)
 
         try:
-            # Warning: assumes a single-strucutre PDB
+            # Warning: assumes a single-structure PDB
             protein_data = pybel.readstring(structure_format, protein_data)
         except ValueError:
             os_util.local_print('Could not understand format {} (guessed from extension)'.format(structure_format),
@@ -1546,6 +1555,13 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                                                 msg_verbosity=os_util.verbosity_level.error,
                                                 current_verbosity=verbosity)
                             raise FileExistsError('File {} exists'.format(os.path.join(output_dir, this_file_name)))
+                    except FileNotFoundError as error:
+                        os_util.local_print('Failed to convert {} file to GROMACS-compatible topologies. Error was:\n'
+                                            '{}\n{}'
+                                            ''.format(str_file, stdout, stderr),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        raise error
                     else:
                         os_util.local_print('Converted {} to the GROMACS-compatible topology {}'
                                             ''.format(str_file, os.path.join(output_dir, this_file_name)),
@@ -1672,7 +1688,8 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     os_util.run_gmx(gmx_bin, editconf_list, '', build_files_dict['editconf_log'], verbosity=verbosity)
 
     # Solvate the ligand
-    solvent_box = guess_water_box(None, build_files_dict['ligand_top'], verbosity=verbosity)
+    solvent_box = guess_water_box(solvate_data.get('water_model', None), build_files_dict['ligand_top'],
+                                  verbosity=verbosity)
     shutil.copy2(build_files_dict['ligand_top'], build_files_dict['ligandsolv_top'])
     solvate_list = ['solvate', '-cp', build_files_dict['ligandbox_pdb'], '-cs', solvent_box,
                     '-o', build_files_dict['ligandsolv_pdb'], '-p', build_files_dict['ligandsolv_top']]
@@ -1698,7 +1715,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     gmx_data = os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'], verbosity=verbosity,
                                die_on_error=False)
     if gmx_data.code != 0:
-        if re.findall('number of coordinates in coordinate file', gmx_data.stderr) is not False:
+        if re.findall('number of coordinates in coordinate file', gmx_data.stderr):
             os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
                                 'stderr:\n{}\n\n{}\nThis is likely caused by a failing to edit the intermediate '
                                 'topology file {}. Rerunning with output_hidden_temp_dir=False may solve this issue.'
@@ -1923,6 +1940,35 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
                                                 error_message='Failed to read input topology file when eddinting the '
                                                               'topology of a pre-solvated system.')
 
+    fn_match_lig = re.compile(r'#include\s+\"ligand\.atp\"', flags=re.IGNORECASE).match
+    if os_util.inner_search(fn_match_lig, topology_data, apply_filter=';') is False:
+        # Ligand atom types not being imported, adding it to after import ff
+        ligatoms_list = ['\n', '; Include ligand atomtypes\n', '#include "ligand.atp"\n', '\n']
+        ligatoms_list.reverse()
+        position = os_util.inner_search('.ff/forcefield.itp', topology_data, apply_filter=';')
+        if position is False:
+            os_util.local_print('Failed to find a forcefield.itp import in topology file {}. This suggests a problem '
+                                'in topology file formatting. Please, check inputs, especially force field.'
+                                ''.format(input_structure_file),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        [topology_data.insert(position + 2, each_line) for each_line in ligatoms_list]
+
+    fn_match_lig = re.compile(r'#include\s+\"ligand\.itp\"', flags=re.IGNORECASE).match
+    if os_util.inner_search(fn_match_lig, topology_data, apply_filter=';') is False:
+        # Ligand topology not being imported, adding before molecules
+        ligtop_list = ['\n', '; Include ligand topology\n', '#include "ligand.itp"\n', '\n']
+        ligtop_list.reverse()
+        fn_match = re.compile(r'\s*\[\s+system\s+]', flags=re.IGNORECASE).match
+        position = os_util.inner_search(fn_match, topology_data, apply_filter=';')
+        if position is False:
+            os_util.local_print('Failed to find a [ system ] directive in topology file {}. This suggests a problem in '
+                                'topology file formatting. Please, check your inputs.'
+                                ''.format(input_structure_file),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        [topology_data.insert(position - 1, each_line) for each_line in ligtop_list]
+
     fn_match = re.compile(r"\[\s+molecules\s+].*", re.IGNORECASE).match
     fn_match_prot = re.compile(r"Protein", re.IGNORECASE).match
     lnum = os_util.inner_search(fn_match, topology_data,
@@ -1948,22 +1994,20 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     for n, i in enumerate(found_str):
         if n >= 1 and i and found_str[n - 1] == False:
             # There is a protein molecule after a non-protein molecule, this should not happen
-            os_util.local_print(
-                'A protein macromolecule was found after a non-protein molecule in topology file {}. This is '
-                'not supported. Make sure all protein molecules are grouped at the beginning of the system file.'
-                ''.format(input_topology),
-                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            os_util.local_print('A protein macromolecule was found after a non-protein molecule in topology file {}.'
+                                ' This is not supported. Make sure all protein molecules are grouped at the '
+                                'beginning of the system file.'
+                                ''.format(input_topology),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(0)
     if any([k.lower() == ligand_name.lower() for (k, j) in new_topology_data]):
         os_util.local_print('A molecule line for {} found in the topology file {}. I am not adding another one.'
                             ''.format(ligand_name, input_topology),
                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
     elif not any(found_str):
-        os_util.local_print(
-            'No protein molecules found in topology file {}, which is odd. Make sure that this is indeed '
-            'what you want. Adding {} as first entry.'
-            ''.format(input_topology, ligand_name),
-            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+        os_util.local_print('No protein molecules found in topology file {}, which is odd. Make sure that this is '
+                            'indeed what you want. Adding {} as first entry.'.format(input_topology, ligand_name),
+                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
         new_topology_data.insert(0, lig_line)
     else:
         # Add the ligand line before the first non-protein molecule

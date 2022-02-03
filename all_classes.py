@@ -1753,13 +1753,14 @@ class PDBFile:
             self.beta_temp = float(atom_line[60:66])
             self.element = atom_line[76:78]
             self.charge = atom_line[78:80]
+            if self.charge.strip() == '':
+                self.charge = ''
 
         def to_line(self):
-            ret_line = '{:6s}{:5d} {:^4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}' \
-                       '          {:>2s}{:2s}\n' \
-                       ''.format(self.record_name, self.serial, self.name, self.alt_loc, self.resname, self.chain,
-                                 self.res_seq, self.i_code, *self.coords, self.occupancy, self.beta_temp, self.element,
-                                 self.charge)
+            ret_line = '{:6s}{:5d} {:^4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}          '\
+                       '{:>2s}{:2s}\n'.format(self.record_name, int(self.serial % 1e5), self.name, self.alt_loc,
+                                              self.resname, self.chain, self.res_seq, self.i_code, *self.coords,
+                                              self.occupancy, self.beta_temp, self.element, self.charge)
             return ret_line
 
     def __init__(self, input_file):
