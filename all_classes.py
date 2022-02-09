@@ -20,6 +20,8 @@
 #  MA 02110-1301, USA.
 #
 #
+import os.path
+import tempfile
 
 import networkx
 import numpy
@@ -784,6 +786,132 @@ class TopologyData:
             pass
         finally:
             return return_list
+
+    @staticmethod
+    def detect_solute_molecule_name(input_file, test_sol_molecules=None, gmx_bin='gmx', no_checks=False, verbosity=0):
+        """Process file, trying to guess the name of the water molecule
+
+        Parameters
+        ----------
+        input_file : str
+            Input file. Must be one of GROMACS-compatible index (.ndx), GROMACS run file (.tpr), GROMACS-compatible
+            topology (.top or .itp), or PDB. Type will be guessed from extension.
+        test_sol_molecules : list
+            Try this molecule names
+        gmx_bin : str
+            GROMACS binary
+        no_checks : bool
+            Ignore checks and keep going
+        verbosity : int
+            Sets verbosity level
+
+        Returns
+        -------
+        str
+        """
+
+        from prepare_dual_topology import read_index_data, make_index
+
+        if not test_sol_molecules:
+            test_sol_molecules = ['SOL', 'WAT', 'HOH', 'TIP3']
+        if isinstance(test_sol_molecules, str):
+            test_sol_molecules = [test_sol_molecules]
+
+        file_type = os.path.splitext(input_file)[1]
+
+        if file_type == '.ndx':
+            molecule_names = read_index_data(input_file, verbosity=verbosity)
+            if not molecule_names:
+                os_util.local_print('Failed to find process index file {} while trying to guess the name of the '
+                                    'water molecules. Cannot continue.'.format(input_file),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
+            else:
+                molecule_names = molecule_names.keys()
+        elif file_type == '.tpr':
+            # Input file is a tpr, use gmx make_ndx, prepare a temporary index file, then process it. make_index is
+            # called with method=internal because mdanalysis method requires the water molecule name for the default
+            # groups.
+            with tempfile.TemporaryDirectory() as this_tmpdir:
+                tmp_index = os.path.join(this_tmpdir, 'index.ndx')
+                make_index(new_index_file=tmp_index, structure_data=input_file, gmx_bin=gmx_bin,
+                                                 method='internal', verbosity=verbosity)
+                molecule_names = read_index_data(tmp_index, verbosity=verbosity).keys()
+        elif file_type in ['.top', '.itp']:
+            # File is a GROMACS-compatible topology file, read [ system ] definition
+            topology_data = os_util.read_file_to_buffer(input_file, die_on_error=True, return_as_list=True,
+                                                        verbosity=verbosity,
+                                                        error_message='Failed to read topology file when trying to '
+                                                                      'guess water model.')
+            fn_match = re.compile(r'\s*\[\s+system\s+]', flags=re.IGNORECASE).match
+            position = os_util.inner_search(fn_match, topology_data, apply_filter=';')
+            if position is False:
+                os_util.local_print('Failed to find a [ system ] directive in topology file {} while trying to guess '
+                                    'the name of the water molecules. Cannot continue.'
+                                    ''.format(input_file),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
+            molecule_names = [each_line.split()[0] for each_line in topology_data[position:]
+                              if each_line.strip() and not each_line.lstrip().startswith(';')]
+
+        elif file_type in ['.pdb']:
+            # Trying to read residues from PDB file
+            # system_data = PDBFile(input_file=input_file)
+            # molecule_names = {i.resname for i in system_data.residues}
+            with tempfile.TemporaryDirectory() as this_tmpdir:
+                tmp_index = os.path.join(this_tmpdir, 'index.ndx')
+                make_index(new_index_file=tmp_index, structure_data=input_file, gmx_bin=gmx_bin,
+                           method='internal', verbosity=verbosity)
+                molecule_names = read_index_data(tmp_index, verbosity=verbosity).keys()
+
+        else:
+            os_util.local_print('Cannot detect a water model in file {} because its format ({}) is now known. Please, '
+                                'use one of .ndx, .tpr, .top, .itp, or .pdb.'
+                                ''.format(input_file, file_type),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise ValueError("File format {} unknown".format(file_type))
+
+        if len(molecule_names) == 0:
+            os_util.local_print('Cannot find water model in file {}. Cannot go on.'
+                                ''.format(input_file),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise ValueError
+
+        found_water_molecules = set(molecule_names).intersection(set(test_sol_molecules))
+        if len(found_water_molecules) == 0:
+            # No matches found
+            os_util.local_print('None of the water molecules {} was found in file {}. The following molecule names '
+                                'were read: {}'
+                                ''.format(test_sol_molecules, input_file, molecule_names),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise KeyError("Water molecule not found".format(file_type))
+        elif len(found_water_molecules) == 1:
+            # Water molecule found, return it
+            return set(molecule_names).intersection(set(test_sol_molecules)).pop()
+        else:
+            # There are multiple molecules names matching candidates test_sol_molecules
+            if no_checks:
+                selected_water_name = molecule_names[0]
+                for selected_water_name in molecule_names:
+                    if selected_water_name in test_sol_molecules:
+                        break
+
+                os_util.local_print('More than a single molecule name in {} matches candidates water molecule names '
+                                    '({}), namely {}. Because you are running with no_checks, I am selecting {} and '
+                                    'going on!'
+                                    ''.format(input_file, test_sol_molecules,
+                                              set(molecule_names).intersection(set(test_sol_molecules)),
+                                              selected_water_name),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                return selected_water_name
+            else:
+                os_util.local_print('More than a single molecule name in {} matches candidates water molecule names '
+                                    '({}), namely {}. Cannot go on. Check your inputs or rerun using no_checks to '
+                                    'suppress this warning.'
+                                    ''.format(input_file, test_sol_molecules,
+                                              set(molecule_names).intersection(set(test_sol_molecules))),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise KeyError("Multiple water names found.")
 
     def find_online_parameter(self, each_element, atoms_dict):
         """ Finds online parameters and returns them as a list

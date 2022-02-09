@@ -136,7 +136,8 @@ def set_default_solvate_data(solvate_data):
 def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='FullSystem.top',
                            index_file='index.ndx', forcefield=1, index_groups=None,
                            selection_method='internal', gmx_bin='gmx', extradirs=None, extrafiles=None,
-                           solvate_data=None, ligand_name='LIG', gmx_maxwarn=1, no_checks=False, verbosity=0, **kwargs):
+                           solvate_data=None, ligand_name='LIG', water_mol_name=None, gmx_maxwarn=1, no_checks=False,
+                           verbosity=0, **kwargs):
     """ Builds a system using gmx tools
 
     :param str structure_file: receptor file (pdb)
@@ -154,6 +155,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                               'water_shell': size of the water shell in A, 'ion_concentration': add ions to this conc,
                               'pname': name of the positive ion, 'nname': name of the negative ion}
     :param str ligand_name: use this as ligand name
+    :param [str, list] water_mol_name: use this a water molecule name
     :param int gmx_maxwarn: passed to gmx grompp to suppress GROMACS warnings during system setup
     :param bool no_checks: ignore checks and try to go on
     :param int verbosity: sets verbosity
@@ -166,6 +168,9 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                         ''.format(structure_file, ligand_dualmol, topology, index_file, forcefield, index_groups,
                                   selection_method, gmx_bin, extradirs, extrafiles, solvate_data, verbosity),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+
+    if isinstance(water_mol_name, str):
+        list(water_mol_name)
 
     solvate_data = set_default_solvate_data(solvate_data)
 
@@ -204,6 +209,10 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                                 'makeindex_log': 'make_index_step7_{}.log',
                                                 'fullsystem_pdb': 'fullsystem_step7_{}.pdb',
                                                 'fullsystem_top': 'fullsystem_step7_{}.top',
+                                                'center_tpr': 'center_tpr_step8_{}.tpr',
+                                                'fullsystemcenter_pdb': 'fullsystem_step8_{}.pdb',
+                                                'center_mdout_mdp': 'center_mdout_step8.mdp',
+                                                'grompp_center_log': 'grompp_center_step8.log',
                                                 'pdb2gmx_log': 'gmx_pdb2gmx_{}.log',
                                                 'editconf_log': 'gmx_editconf_{}.log',
                                                 'solvate_log': 'gmx_solvate_{}.log',
@@ -294,7 +303,8 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     ligtop_list = ['\n', '; Include ligand topology\n', '#include "ligand.itp"\n', '\n']
     ligtop_list.reverse()
 
-    position = os_util.inner_search('.ff/forcefield.itp', system_topology_list, apply_filter=';')
+    position = os_util.inner_search(re.compile(r'#include\s+\".*forcefield\.itp\"', flags=re.IGNORECASE).match,
+                                    system_topology_list, apply_filter=';')
     if position is False:
         new_file_name = os.path.basename(build_files_dict['protein_top'])
         shutil.copy2(build_files_dict['protein_top'], new_file_name)
@@ -496,9 +506,25 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                    '-p', build_files_dict['fullsystem_top'], '-o', build_files_dict['fullsystem_pdb'],
                    '-conc', str(solvate_data['ion_concentration']), '-neutral',
                    '-nname', solvate_data['nname'], '-pname', solvate_data['pname']]
-    os_util.run_gmx(gmx_bin, genion_list, 'SOL\n', build_files_dict['genion_log'],
+
+    water_name = all_classes.TopologyData.detect_solute_molecule_name(input_file=build_files_dict['genion_tpr'],
+                                                                      test_sol_molecules=water_mol_name,
+                                                                      gmx_bin=gmx_bin, no_checks=no_checks,
+                                                                      verbosity=verbosity)
+    os_util.run_gmx(gmx_bin, genion_list, '{}\n'.format(water_name), build_files_dict['genion_log'],
                     alt_environment={'GMX_MAXBACKUP': '-1'}, verbosity=verbosity)
 
+    # 5.3 Wrap system into a compact cell
+    grompp_list = ['grompp', '-f', build_files_dict['genion_mdp'], '-c', build_files_dict['fullsystem_pdb'],
+                   '-p', build_files_dict['fullsystem_top'], '-o', build_files_dict['center_tpr'],
+                   '-maxwarn', str(gmx_maxwarn), '-po', build_files_dict['center_mdout_mdp']]
+    os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_center_log'],
+                    verbosity=verbosity)
+
+    trjconv_list = ['trjconv', '-f', build_files_dict['fullsystem_pdb'], '-s', build_files_dict['center_tpr'],
+                    '-o', build_files_dict['fullsystemcenter_pdb'], '-pbc', 'mol', '-ur', 'compact', '-center']
+    os_util.run_gmx(gmx_bin, trjconv_list, 'C-alpha\nSystem\n', build_files_dict['grompp_center_log'],
+                    verbosity=verbosity)
     # 6. Make index
 
     # Include a Protein_{Ligand} group in case users does not include one
@@ -519,12 +545,12 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
         elif selection_method == 'internal':
             index_groups.update({'Protein_LIG': '"Protein" | "{}"'.format(ligand_name)})
 
-    make_index(build_files_dict['index_ndx'], build_files_dict['fullsystem_pdb'], index_groups,
-               selection_method, gmx_bin=gmx_bin, logfile=build_files_dict['makeindex_log'], verbosity=verbosity)
+    make_index(build_files_dict['index_ndx'], build_files_dict['fullsystem_pdb'], index_groups, selection_method,
+               gmx_bin=gmx_bin, logfile=build_files_dict['makeindex_log'], water_name=water_name, verbosity=verbosity)
 
     # 7. Copy files do lambda directories
     copyfiles.update({build_files_dict['fullsystem_top']: build_files_dict['full_topology_file'],
-                      build_files_dict['fullsystem_pdb']: build_files_dict['final_structure_file'],
+                      build_files_dict['fullsystemcenter_pdb']: build_files_dict['final_structure_file'],
                       build_files_dict['index_ndx']: build_files_dict['final_index_file']})
 
     for each_source, each_dest in copyfiles.items():
@@ -535,7 +561,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
         shutil.copy2(each_source, os.path.join(base_dir, 'protein', each_dest))
 
     return all_classes.Namespace({'build_dir': build_system_dir, 'structure': output_structure_file,
-                                  'topology': output_topology_file})
+                                  'topology': output_topology_file, 'water_name': water_name})
 
 
 def prepare_output_scripts_data(header_template=None, script_type='bash', submission_args=None,
@@ -1380,17 +1406,29 @@ def edit_itp(itp_filename):
 
 
 def make_index(new_index_file, structure_data, index_data=None, method='internal', gmx_bin='gmx',
-               logfile=None, ligand_name='LIG', verbosity=0):
-    """ Generate a index from data in structure_data using groups in index_data
+               logfile=None, ligand_name='LIG', water_name='SOL', verbosity=0):
+    """Generate a index from data in structure_data using groups in index_data
 
-    :param str new_index_file: save index to this file
-    :param [str, MDAnalysis.Universe] structure_data: structure file or MDAnalysis.Universe of system
-    :param dict index_data: generate index for this selection groups
-    :param str method: method to be used; options: internal (default), mdanalysis
-    :param str gmx_bin: gromacs binary (only used if method == internal; default: gmx)
-    :param str logfile: save log to this file. None: do not save
-    :param str ligand_name: use this as ligand name
-    :param int verbosity: verbosity level
+    Parameters
+    ----------
+    new_index_file : str
+        Save index to this file
+    structure_data : str or MDAnalysis.Universe
+        Structure file or MDAnalysis.Universe of system
+    index_data : dict
+        Generate index for this selection groups
+    method : str
+        Method to be used; options: internal (default), mdanalysis
+    gmx_bin : str
+        GROMACS binary (only used if method == internal; default: gmx)
+    logfile : str
+        Save log to this file. None: do not save
+    ligand_name : str
+        Use this as ligand name
+    water_name : str
+        Use this as the name of the water molecule
+    verbosity : int
+        Sets verbosity level
     """
 
     if index_data is None:
@@ -1414,11 +1452,11 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
         # gmx make_ndx has some default groups, while MDAnalysis does not. Create some default groups in case user
         default_groups = {'System': 'all',
                           'Protein': 'protein',
-                          'Water': 'resname SOL',
+                          'Water': 'resname {}'.format(water_name),
                           'LIG': 'resname {}'.format(ligand_name),
                           'C-alpha': 'name CA',
                           'Protein_LIG': 'protein or resname {}'.format(ligand_name),
-                          'Water_and_ions': 'resname SOL or resname NA or resname CL or resname K'}
+                          'Water_and_ions': 'resname {} or resname NA or resname CL or resname K'.format(water_name)}
 
         [default_groups.setdefault(k, v) for k, v in index_data.items()]
 
@@ -1579,9 +1617,9 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                 return return_data
 
 
-def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein_topology_files,
-                         solvate_data=None, protein_dir=None, gmx_bin='gmx', ligand_name='LIG',
-                         gmx_maxwarn=1, verbosity=0, **kwargs):
+def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein_topology_files, solvate_data=None,
+                         protein_dir=None, gmx_bin='gmx', ligand_name='LIG', water_name='SOL', gmx_maxwarn=1,
+                         no_checks=False, verbosity=0, **kwargs):
     """ Prepares a system consisting in a dual-topology molecule solvated and with counter ions added
 
     :param merge_topologies.MergedTopology dual_molecule_ligand: pseudo-molecule to be solvated
@@ -1599,7 +1637,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     :param int verbosity: set vebosity level
     """
 
-    # Save intemediate files used to build the water system to this dir
+    # Save intermediate files used to build the water system to this dir
     solvate_data = set_default_solvate_data(solvate_data)
 
     build_water_dir = os.path.join(water_dir, 'build_water_{}'.format(time.strftime('%H%M%S_%d%m%Y')))
@@ -1616,6 +1654,10 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                                                 'genion_mdp': 'genion_step5_{}.mdp',
                                                 'mdout_mdp': 'mdout_step5_{}.mdp',
                                                 'genion_tpr': 'genion_step5_{}.tpr',
+                                                'center_tpr': 'center_tpr_step6_{}.tpr',
+                                                'fullsystemcenter_pdb': 'fullsystem_step6_{}.pdb',
+                                                'center_mdout_mdp': 'center_mdout_step6.mdp',
+                                                'grompp_center_log': 'grompp_center_step6.log',
                                                 'editconf_log': 'gmx_editconf_{}.log',
                                                 'solvate_log': 'gmx_solvate_{}.log',
                                                 'grompp_log': 'gmx_grompp_{}.log',
@@ -1707,6 +1749,36 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     with open(build_files_dict['genion_mdp'], 'w') as genion_fh:
         genion_fh.write('include = -I{}\n'.format(build_water_dir))
 
+    # Edits the topology, setting the name of the water molecule. The default water molecule name is SOL, so move on if
+    # no altering is needed
+    if water_name != 'SOL':
+        topology_data = os_util.read_file_to_buffer(build_files_dict['ligandsolv_top'], return_as_list=True,
+                                                    die_on_error=True,
+                                                    error_message='Failed to read intermediate topology file when '
+                                                                  'building the water system.')
+        position = os_util.inner_search(re.compile(r'\s*\[\s+molecules\s+]', flags=re.IGNORECASE).match,
+                                        topology_data)
+        if position is False:
+            os_util.local_print('Unable to find a [ molecules ] directive in the intermediate topology file {} while '
+                                'preparing a water system. Cannot go on.'.format(build_files_dict['ligandsolv_top']),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+            raise ValueError
+
+        for i, each_ln in enumerate(topology_data[position:]):
+            if not each_ln.strip() or each_ln.strip().startswith(';'):
+                continue
+
+            if each_ln.split()[0] == 'SOL':
+                topology_data[position+i] = '{} {}\n'.format(water_name, each_ln.split()[1])
+                break
+        else:
+            os_util.local_print('Unable to find SOL molecules in the intermediate topology file {} while '
+                                'preparing a water system. Cannot go on.'.format(build_files_dict['ligandsolv_top']),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+            raise ValueError
+        with open(build_files_dict['ligandsolv_top'], 'w') as fh:
+            fh.writelines(topology_data)
+
     # Prepare a tpr to genion
     grompp_list = ['grompp', '-f', build_files_dict['genion_mdp'],
                    '-c', build_files_dict['ligandsolv_pdb'], '-p', build_files_dict['ligandsolv_top'],
@@ -1736,16 +1808,33 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     genion_list = ['genion', '-s', build_files_dict['genion_tpr'], '-p', build_files_dict['fullsystem_top'],
                    '-o', build_files_dict['fullsystem_pdb'], '-pname', solvate_data['pname'], '-nname',
                    solvate_data['nname'], '-conc', str(solvate_data['ion_concentration']), '-neutral']
-    os_util.run_gmx(gmx_bin, genion_list, 'SOL\n', build_files_dict['genion_log'],
-                    alt_environment={'GMX_MAXBACKUP': '-1'},
+
+    water_name = all_classes.TopologyData.detect_solute_molecule_name(input_file=build_files_dict['genion_tpr'],
+                                                                      test_sol_molecules=water_name,
+                                                                      gmx_bin=gmx_bin, no_checks=no_checks,
+                                                                      verbosity=verbosity)
+    os_util.run_gmx(gmx_bin, genion_list, '{}\n'.format(water_name), build_files_dict['genion_log'],
+                    alt_environment={'GMX_MAXBACKUP': '-1'}, verbosity=verbosity)
+
+    # Wrap system into a compact cell
+    grompp_list = ['grompp', '-f', build_files_dict['genion_mdp'], '-c', build_files_dict['fullsystem_pdb'],
+                   '-p', build_files_dict['fullsystem_top'], '-o', build_files_dict['center_tpr'],
+                   '-maxwarn', str(gmx_maxwarn), '-po', build_files_dict['center_mdout_mdp']]
+    os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_center_log'],
+                    verbosity=verbosity)
+
+    trjconv_list = ['trjconv', '-f', build_files_dict['fullsystem_pdb'], '-s', build_files_dict['center_tpr'],
+                    '-o', build_files_dict['fullsystemcenter_pdb'], '-pbc', 'mol', '-ur', 'compact', '-center']
+    os_util.run_gmx(gmx_bin, trjconv_list, '2\nSystem\n', build_files_dict['grompp_center_log'],
                     verbosity=verbosity)
 
     # Prepare index
     make_index(new_index_file=build_files_dict['index_ndx'], structure_data=build_files_dict['fullsystem_pdb'],
                method=arguments.selection_method, logfile=build_files_dict['makendx_log'], gmx_bin=gmx_bin,
-               verbosity=verbosity)
+               water_name=water_name, verbosity=verbosity)
 
-    copywaterfiles = protein_topology_files + [build_files_dict['fullsystem_top'], build_files_dict['fullsystem_pdb'],
+    copywaterfiles = protein_topology_files + [build_files_dict['fullsystem_top'],
+                                               build_files_dict['fullsystemcenter_pdb'],
                                                build_files_dict['index_ndx']]
 
     for each_source in copywaterfiles:
@@ -1762,7 +1851,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     return all_classes.Namespace({'topology': build_files_dict['fullsystem_top'],
-                                  'structure': build_files_dict['fullsystem_pdb']})
+                                  'structure': build_files_dict['fullsystemcenter_pdb']})
 
 
 def create_fep_dirs(dir_name, base_pert_dir, new_files=None, extra_dir=None, extra_files=None, verbosity=0):
@@ -1937,7 +2026,7 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     ## Edit topology to reflect the change in the number of water molecules
     # Read topology and prepare the matches
     topology_data = os_util.read_file_to_buffer(input_topology, return_as_list=True, die_on_error=True,
-                                                error_message='Failed to read input topology file when eddinting the '
+                                                error_message='Failed to read input topology file when editing the '
                                                               'topology of a pre-solvated system.')
 
     fn_match_lig = re.compile(r'#include\s+\"ligand\.atp\"', flags=re.IGNORECASE).match
@@ -1945,11 +2034,12 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
         # Ligand atom types not being imported, adding it to after import ff
         ligatoms_list = ['\n', '; Include ligand atomtypes\n', '#include "ligand.atp"\n', '\n']
         ligatoms_list.reverse()
-        position = os_util.inner_search('.ff/forcefield.itp', topology_data, apply_filter=';')
+        position = os_util.inner_search(re.compile(r'#include\s+\".*forcefield\.itp\"').match,
+                                        topology_data, apply_filter=';')
         if position is False:
             os_util.local_print('Failed to find a forcefield.itp import in topology file {}. This suggests a problem '
                                 'in topology file formatting. Please, check inputs, especially force field.'
-                                ''.format(input_structure_file),
+                                ''.format(input_topology),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
         [topology_data.insert(position + 2, each_line) for each_line in ligatoms_list]
@@ -2752,6 +2842,8 @@ if __name__ == '__main__':
                               help='Use this water model. If default, "1" will be supplied to pdb2gmx, selecting FF '
                                    'default water model, otherwise the chosen name will be passed as -water option to '
                                    'pdb2gmx.')
+    build_system.add_argument('--buildsys_water_mol_name', default=None,
+                              help='Use this name for the water molecule. Default: autodetect')
     build_system.add_argument('--buildsys_watershell', type=float, default=None,
                               help='Distance, in Angstroms, between the solute and the box (Default: 10 A)')
     build_system.add_argument('--buildsys_boxtype', choices=['triclinic', 'cubic', 'dodecahedron', 'octahedron'],
@@ -3108,7 +3200,11 @@ if __name__ == '__main__':
                                 'generated index file may help. Note: a "Protein" group is expected in such file.'
                                 ''.format(arguments.index),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
-            make_index(new_index_file=arguments.index, structure_data=arguments.structure,
+            water_name = all_classes.TopologyData.detect_solute_molecule_name(
+                input_file=arguments.structure, test_sol_molecules=arguments.buildsys_water_mol_name,
+                gmx_bin=arguments.gmx_bin_local, no_checks=arguments.no_checks, verbosity=arguments.verbose
+            )
+            make_index(new_index_file=arguments.index, structure_data=arguments.structure, water_name=water_name,
                        method=arguments.selection_method, gmx_bin=arguments.gmx_bin_local, verbosity=arguments.verbose)
             index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
 
@@ -3396,23 +3492,26 @@ if __name__ == '__main__':
         if arguments.pre_solvated:
             # User provided a pre-solvated structure
 
+            this_index = os.path.join(base_pert_dir, morph_dir, 'protein', 'index.ndx')
+            this_struct_file = os.path.join(base_pert_dir, morph_dir, 'protein', 'FullSystem.pdb')
+            this_top_file = os.path.join(base_pert_dir, morph_dir, 'protein', 'FullSystem.top')
+
             # Align ligand
             add_ligand_to_solvated_receptor(merged_data, arguments.structure,
-                                            output_structure_file=os.path.join(base_pert_dir, morph_dir, 'protein',
-                                                                               'FullSystem.pdb'),
-                                            index_data=index_data, input_topology=arguments.topology,
-                                            output_topology_file=os.path.join(base_pert_dir, morph_dir, 'protein',
-                                                                              'FullSystem.top'),
+                                            output_structure_file=this_struct_file, index_data=index_data,
+                                            input_topology=arguments.topology, output_topology_file=this_top_file,
                                             radius=arguments.presolvated_radius,
-                                            selection_method=arguments.selection_method,
-                                            verbosity=arguments.verbose)
+                                            selection_method=arguments.selection_method, verbosity=arguments.verbose)
 
             # FIXME: run genion here to neutralize the system in a case a user supply a system with a different charge
             #  than the sun system (this should be uncommon)
-            make_index(new_index_file=os.path.join(base_pert_dir, morph_dir, 'protein', 'index.ndx'),
-                       structure_data=os.path.join(base_pert_dir, morph_dir, 'protein', 'FullSystem.pdb'),
-                       index_data=new_index_groups_dict, method=arguments.selection_method,
-                       gmx_bin=arguments.gmx_bin_local, verbosity=arguments.verbose)
+            water_name = all_classes.TopologyData.detect_solute_molecule_name(
+                input_file=this_top_file, test_sol_molecules=arguments.buildsys_water_mol_name,
+                gmx_bin=arguments.gmx_bin_local, no_checks=arguments.no_checks, verbosity=arguments.verbose
+            )
+            make_index(new_index_file=this_index, structure_data=this_struct_file, index_data=new_index_groups_dict,
+                       method=arguments.selection_method, water_name=water_name, gmx_bin=arguments.gmx_bin_local,
+                       verbosity=arguments.verbose)
 
             output_structure_file = 'FullSystem.pdb'
             output_topology_file = 'FullSystem.top'
@@ -3442,11 +3541,13 @@ if __name__ == '__main__':
                                                 selection_method=arguments.selection_method,
                                                 gmx_bin=arguments.gmx_bin_local, extradirs=arguments.extradirs,
                                                 gmx_maxwarn=arguments.gmx_maxwarn, extrafiles=arguments.extrafiles,
-                                                solvate_data=solvate_data, verbosity=arguments.verbose)
-
+                                                solvate_data=solvate_data, no_checks=arguments.no_checks,
+                                                water_mol_name=arguments.buildsys_water_mol_name,
+                                                verbosity=arguments.verbose)
             unwanted_files += [os.path.basename(build_data.build_dir)]
             output_structure_file = build_data.structure
             output_topology_file = build_data.topology
+            water_name = build_data.water_name
 
         protein_topology_files = [os.path.join(base_pert_dir, morph_dir, 'protein', each_file)
                                   for each_file in os.listdir(os.path.join(base_pert_dir, morph_dir, 'protein'))
@@ -3462,6 +3563,7 @@ if __name__ == '__main__':
                                           topology_file=output_topology_file, solvate_data=solvate_data,
                                           protein_topology_files=protein_topology_files,
                                           gmx_maxwarn=arguments.gmx_maxwarn, gmx_bin=arguments.gmx_bin_local,
+                                          water_name=water_name, no_checks=arguments.no_checks,
                                           verbosity=arguments.verbose)
 
         # Create lambda dirs
