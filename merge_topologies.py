@@ -357,8 +357,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                   max(rms_list), best_solution),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    [molecule.RemoveConformer(conformer.GetId()) for conformer in molecule.GetConformers()
-     if conformer.GetId() != best_solution]
+    all_conf_ids = [i.GetId() for i in molecule.GetConformers()]
+    [molecule.RemoveConformer(conformer) for conformer in all_conf_ids if conformer != best_solution]
 
     return molecule
 
