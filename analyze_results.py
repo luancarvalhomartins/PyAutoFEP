@@ -34,7 +34,7 @@ from io import StringIO
 from alchemlyb.estimators import BAR
 try:
     from alchemlyb.estimators import AutoMBAR as MBAR
-except:
+except ImportError:
     from alchemlyb.estimators import MBAR
 
 kB_kJ = 1.3806504 * 6.02214129 / 1000.0  # Boltzmann's constant (kJ/mol/K).
@@ -44,7 +44,7 @@ formatted_energy_units = {
     'kBT': Namespace({'text': 'k_BT', 'kB': 1})
 }
 
-# The GROMACS unit is ps, time_units.unit.multi * ps will convert to desired the unit
+# The GROMACS unit is ps, time_units.unit.multi * ps will convert it to the desired unit
 formatted_time_units = {
     'us': Namespace({'text': 'µs', 'mult': 1e-6}),
     'ns': Namespace({'text': 'ns', 'mult': 1e-3}),
@@ -138,12 +138,15 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
     if not estimators:
         estimators = {'mbar': MBAR}
 
-    try:
-        beta = 1 / (formatted_energy_units[units].kB * temperature)
-    except KeyError:
-        os_util.local_print('Energy unit {} unknown. Please use one of {}'.format(units, [k for k in formatted_energy_units]),
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise SystemExit(1)
+    if units == 'kBT':
+        beta = formatted_energy_units[units].kB
+    else:
+        try:
+            beta = 1 / (formatted_energy_units[units].kB * temperature)
+        except KeyError:
+            os_util.local_print('Energy unit {} unknown. Please use one of {}'.format(units, [k for k in formatted_energy_units]),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
 
     u_nk_after_first = u_nk.iloc[(u_nk.index.to_frame()['time'] >= first_frame).values]
 
