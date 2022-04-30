@@ -8,6 +8,9 @@ Furthermore, it aims to be as flexible as possible, giving the user great contro
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 
 ## Announcements
+**Support for OpenBabel 3.X to be added**<br/>
+I am working on updating support from OpenBabel 2.4 to OpenBabel 3.X version series. OpenBabel 2.4 was released back in 2016. The current 3.X series, released starting from Oct 2019 with 3.0, is strongly recomended. Backward compatibility with 2.4 will no be mantained. I will make sure add a note here when this change gets committed.
+
 **Commit fe41f7d (19.01.2022)**<br/>
 This commit introduces a bunch of new features and code changes. Even though I tested newly implemented and rewritten code, **things may break**. Please, fill 
 issues should you experience any problem. Main changes:
