@@ -9,7 +9,7 @@ provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in 
 
 ## Announcements
 **Support for OpenBabel 3.X to be added**<br/>
-I am working on updating support from OpenBabel 2.4 to OpenBabel 3.X version series. OpenBabel 2.4 was released back in 2016. The current 3.X series, released starting from Oct 2019 with 3.0, is strongly recomended. Backward compatibility with 2.4 will no be mantained. I will make sure add a note here when this change gets committed.
+I am working on updating support from OpenBabel 2.4 to OpenBabel 3.X version series. OpenBabel 2.4 was released back in 2016. The current 3.X series, released starting from Oct 2019 with 3.0, is strongly recomended. Backward compatibility with 2.4 ~~will not be~~ **will be** mantained. I will make sure add a note here when this change gets committed.
 
 **Commit fe41f7d (19.01.2022)**<br/>
 This commit introduces a bunch of new features and code changes. Even though I tested newly implemented and rewritten code, **things may break**. Please, fill 
@@ -22,13 +22,14 @@ issues should you experience any problem. Main changes:
 ## Requirements
 - Common GNU programs: Bash, awk, tar
 - [GROMACS](https://www.gromacs.org/) 2016 or newer
+- [GNU parallel](https://www.gnu.org/software/parallel/) on the run node, used during the rerun step (See manual for details).
 - Python 3.6+
 - [rdkit](https://www.rdkit.org/) 2019.03+
 - [networkx](https://networkx.org) 2.X (1.X versions are not supported)
 - [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.6.0 & [pymbar](https://github.com/choderalab/pymbar) 3.0.5 OR [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3.0 & [pymbar](https://github.com/choderalab/pymbar) 3.0.3 (Because of https://github.com/choderalab/pymbar/issues/419)
 - [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*. openbabel 3.X is not currently not supported, but eventually will)
 - matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation_map.py*)
-- numpy (required only in *analyze_results.py*)
+- numpy
 
 Optional requirements. The following are not required to run basic calculations in PyAutoFEP, but are needed for specific functions.
 
