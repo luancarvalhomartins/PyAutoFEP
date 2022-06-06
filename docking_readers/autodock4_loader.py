@@ -38,6 +38,7 @@ def extract_autodock4_poses(ligands_dict, poses_data=None, no_checks=False, verb
     :rtype: dict
     """
 
+    # TODO: replace awk with internal parsing of Autodock4 output
     awk_extract_poses = """
     BEGIN {{
         Found = 0
@@ -60,30 +61,7 @@ def extract_autodock4_poses(ligands_dict, poses_data=None, no_checks=False, verb
     }}
     """
 
-    #FIXME: fix this method
-
-    if isinstance(poses_data, str):
-        raw_data = os_util.read_file_to_buffer(poses_data, die_on_error=True, return_as_list=True,
-                                               error_message='Failed to read poses data file.', verbosity=verbosity)
-        docking_poses_data = {}
-        for each_line in raw_data:
-            if (len(each_line) <= 1) or (each_line[0] in [';', '#']):
-                continue
-            lig_data = each_line.split('=')
-            try:
-                docking_poses_data[lig_data[0].rstrip()] = int(lig_data[1])
-            except (ValueError, IndexError) as error_data:
-                os_util.local_print('Could not read line "{}" from file {} with error {}'
-                                    ''.format(each_line, poses_data, error_data),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise SystemExit(1)
-    elif isinstance(poses_data, dict):
-        docking_poses_data = poses_data
-    else:
-        docking_poses_data = {}
-
-    os_util.local_print('{:=^50}\n{:<15} {:<15} {:<15}'.format(' Autodock4 poses ', 'Name', 'File', 'Cluster #'),
-                        msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
+    docking_poses_data = os_util.parse_simple_config_file(poses_data, verbosity=verbosity)
 
     for each_name, each_mol in ligands_dict.items():
         # Extract cluster data and reads it
@@ -91,15 +69,13 @@ def extract_autodock4_poses(ligands_dict, poses_data=None, no_checks=False, verb
 
         try:
             docking_cluster_pdb = subprocess.check_output(['awk', awk_extract_poses.format(cluster_num), each_mol])
-        except subprocess.CalledProcessError as error_data:
-            os_util.local_print('Could not run external program. Error: {}'.format(error_data),
+        except (subprocess.CalledProcessError, FileNotFoundError) as error_data:
+            os_util.local_print('Could not run external program "awk" when extracting docking data from file {}. '
+                                'Error was:\n{}'.format(error_data, each_mol),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             if not no_checks:
-                raise SystemExit(1)
+                raise error_data
             else:
-                os_util.local_print('{:<15} {:<18} {:<15} ERROR!!!'
-                                    ''.format(each_name, each_mol, cluster_num),
-                                    msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
                 continue
         else:
             mol_awk_result = docking_cluster_pdb.decode(sys.stdout.encoding)
@@ -107,19 +83,17 @@ def extract_autodock4_poses(ligands_dict, poses_data=None, no_checks=False, verb
                 os_util.local_print('Failed to read cluster {} from file {}.'
                                     ''.format(each_mol, cluster_num),
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                if not no_checks:
-                    raise SystemExit(1)
-                else:
-                    os_util.local_print('{:<15} {:<18} {:<15} ERROR!!!'
-                                        ''.format(each_name, each_mol, cluster_num),
-                                        msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
+                if no_checks:
                     continue
+                else:
+                    raise IOError("Failed to read data from file {}".format(each_name))
 
             original_file_path = ligands_dict[each_name]
             ligands_dict[each_name] = all_classes.Namespace()
-            ligands_dict[each_name].format = 'pdbqt'
+            ligands_dict[each_name].filename = original_file_path
+            ligands_dict[each_name].format = 'pdb'
             ligands_dict[each_name].data = mol_awk_result
-            ligands_dict[each_name].comment = '{} cluster {}'.format(original_file_path, cluster_num)
+            ligands_dict[each_name].comment = 'cluster {}'.format(cluster_num)
 
     return extract_docking_poses(ligands_dict, verbosity=verbosity)
 
@@ -132,9 +106,15 @@ def extract_docking_receptor(receptor_file, verbosity=0):
     :rtype: pybel.OBMol
     """
 
-    import pybel
-    if verbosity <= 3:
+    try:
+        from openbabel import pybel
+    except ImportError:
+        import pybel
+    if verbosity < os_util.verbosity_level.extra_debug:
         pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
+    else:
+        os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                            msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
 
     receptor_format = os.path.splitext(receptor_file)[1].lstrip('.')
     if receptor_format == 'pdbqt':

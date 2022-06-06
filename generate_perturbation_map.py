@@ -20,7 +20,7 @@
 #  MA 02110-1301, USA.
 #
 #
-
+import os.path
 from copy import deepcopy
 import networkx
 import argparse
@@ -303,7 +303,7 @@ def process_custom_mcs(custom_mcs, savestate=None, verbosity=0):
 
 if __name__ == '__main__':
     Parser = argparse.ArgumentParser(description='Generate a perturbation map using a heuristic algorithm')
-    Parser.add_argument('-i', '--input', type=str, nargs='+', help='Input molecules')
+    Parser.add_argument('-i', '--input', type=str, nargs='+', default=None, help='Input molecules')
     Parser.add_argument('--use_hs', default=None, help='Use hydrogens to score perturbations (Default: off)')
     Parser.add_argument('--custom_mcs', type=str, default=None,
                         help='Use this/these custom MCS between pairs. Can be either a string (so the same MCS '
@@ -366,12 +366,6 @@ if __name__ == '__main__':
 
     progress_data = savestate_util.SavableState(arguments.progress_file)
 
-    if arguments.input is None:
-        os_util.local_print('No input files were provided. Please, do so by using --input or input option in your '
-                            'configuration file',
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-        raise SystemExit(1)
-
     if isinstance(arguments.map_communication_frequency, int) and arguments.map_communication_frequency > 0:
         comm_freq = arguments.map_communication_frequency
     elif arguments.map_type != 'star':
@@ -405,9 +399,8 @@ if __name__ == '__main__':
         # Or reads molecules and prepare a networkx.Graph from it
         molecules_dict = OrderedDict()
         for each_file in arguments.input:
-            if arguments.verbose >= 1:
-                os_util.local_print('Reading data from file {}'.format(each_file),
-                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
+            os_util.local_print('Reading data from file {}'.format(each_file),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
             file_ext = splitext(each_file)[1]
             if file_ext in ['.smi', '.smiles']:
 
@@ -436,16 +429,13 @@ if __name__ == '__main__':
                                                                                   ''.format(len(molecules_dict) + 1),
                                                                  verbosity=arguments.verbose)
                     molecules_dict[new_mol_name] = each_mol
-            elif file_ext in ['.mol2', '.mol']:
-                if file_ext == '.mol2':
-                    each_mol = rdkit.Chem.MolFromMol2File(each_file, removeHs=False)
-                else:
-                    each_mol = rdkit.Chem.MolFromMolFile(each_file, removeHs=False)
+            else:
+                each_mol = mol_util.generic_mol_read(ligand_data=each_file, ligand_format=file_ext,
+                                                     no_checks=arguments.no_checks, verbosity=arguments.verbose)
                 if each_mol is not None:
                     each_mol = mol_util.process_dummy_atoms(each_mol, verbosity=arguments.verbose)
-                    new_mol_name = mol_util.verify_molecule_name(each_mol, molecules_dict,
-                                                                 new_default_name='Mol_{}'
-                                                                                  ''.format(len(molecules_dict) + 1),
+                    tmp_name = os.path.splitext(os.path.basename(each_file))[0]
+                    new_mol_name = mol_util.verify_molecule_name(each_mol, molecules_dict, new_default_name=tmp_name,
                                                                  verbosity=arguments.verbose)
                     molecules_dict[new_mol_name] = each_mol
                 else:
@@ -462,19 +452,6 @@ if __name__ == '__main__':
                 progress_data['ligands_data'] = {mol_name: {'molecule': rdkit.Chem.PropertyMol.PropertyMol(rdmol)}
                                                  for mol_name, rdmol in molecules_dict.items()}
                 progress_data['ligands_data_{}'.format(time.strftime('%d%m%Y_%H%M%S'))] = progress_data['ligands_data']
-
-            else:
-                if not arguments.no_checks:
-                    os_util.local_print('Failed to read file {}: format {} not recognized.'
-                                        ''.format(each_file, file_ext),
-                                        msg_verbosity=os_util.verbosity_level.error,
-                                        current_verbosity=arguments.verbose)
-                    raise SystemExit(1)
-                else:
-                    os_util.local_print('Failed to read file {}: format {} not recognized.'
-                                        ''.format(each_file, file_ext),
-                                        msg_verbosity=os_util.verbosity_level.error,
-                                        current_verbosity=arguments.verbose)
 
         if len(molecules_dict) == 2:
             if arguments.no_checks:
@@ -671,41 +648,42 @@ if __name__ == '__main__':
             matplotlib.pyplot.savefig('best_graph.svg')
             matplotlib.pyplot.clf()
 
-            color_map = [each_edge[2] for each_edge in ant_colony.complete_network_undirect.edges(data='desirability')]
-            if arguments.optimal_permanent_edge_threshold > 0:
-                color_map = [each_edge if each_edge <= arguments.optimal_permanent_edge_threshold
-                             else arguments.optimal_permanent_edge_threshold for each_edge in color_map]
+            if arguments.verbose >= os_util.verbosity_level.info:
+                color_map = [each_edge[2] for each_edge in ant_colony.complete_network_undirect.edges(data='desirability')]
+                if arguments.optimal_permanent_edge_threshold > 0:
+                    color_map = [each_edge if each_edge <= arguments.optimal_permanent_edge_threshold
+                                 else arguments.optimal_permanent_edge_threshold for each_edge in color_map]
 
-            networkx.drawing.draw(ant_colony.complete_network, with_labels=True, node_color='#A0CBE2', width=4,
-                                  edge_cmap=matplotlib.pyplot.cm.Greys, edge_color=color_map,
-                                  pos=networkx.circular_layout(ant_colony.complete_network))
-            matplotlib.pyplot.savefig('full_graph.svg')
+                networkx.drawing.draw(ant_colony.complete_network, with_labels=True, node_color='#A0CBE2', width=4,
+                                      edge_cmap=matplotlib.pyplot.cm.Greys, edge_color=color_map,
+                                      pos=networkx.circular_layout(ant_colony.complete_network))
+                matplotlib.pyplot.savefig('full_graph.svg')
 
-            subplots_fig, subplots_axs = matplotlib.pyplot.subplots(2, 2, figsize=(10, 10))
-            subplots_axs[0, 0].set_title('Score per run (log)')
-            subplots_axs[0, 0].semilogy(ant_colony.cost_list, 'b-')
-            subplots_axs[0, 1].set_title('Score per run (linear, decomposed)')
+                subplots_fig, subplots_axs = matplotlib.pyplot.subplots(2, 2, figsize=(10, 10))
+                subplots_axs[0, 0].set_title('Score per run (log)')
+                subplots_axs[0, 0].semilogy(ant_colony.cost_list, 'b-')
+                subplots_axs[0, 1].set_title('Score per run (linear, decomposed)')
 
-            cost_decomposition_matrix = {'total': [], 'length': [], 'perturbation': [], 'degree': []}
-            for each_solution in ant_colony.solutions:
-                cost_data = ant_colony.calculate_network_cost(each_solution.graph, decompose=True)
-                cost_decomposition_matrix['total'].append(cost_data['total'])
-                cost_decomposition_matrix['length'].append(cost_data['length'])
-                cost_decomposition_matrix['perturbation'].append(cost_data['perturbation'])
-                cost_decomposition_matrix['degree'].append(cost_data['degree'])
+                cost_decomposition_matrix = {'total': [], 'length': [], 'perturbation': [], 'degree': []}
+                for each_solution in ant_colony.solutions:
+                    cost_data = ant_colony.calculate_network_cost(each_solution.graph, decompose=True)
+                    cost_decomposition_matrix['total'].append(cost_data['total'])
+                    cost_decomposition_matrix['length'].append(cost_data['length'])
+                    cost_decomposition_matrix['perturbation'].append(cost_data['perturbation'])
+                    cost_decomposition_matrix['degree'].append(cost_data['degree'])
 
-            subplots_axs[0, 1].plot(cost_decomposition_matrix['total'], label='Total cost', color='#000000')
-            subplots_axs[0, 1].plot(cost_decomposition_matrix['length'], label='Length cost', color='#CC6666')
-            subplots_axs[0, 1].plot(cost_decomposition_matrix['perturbation'], label='Perturb. cost', color='#66CC66')
-            subplots_axs[0, 1].plot(cost_decomposition_matrix['degree'], label='Degree cost', color='#6666CC')
-            subplots_axs[0, 1].legend()
+                subplots_axs[0, 1].plot(cost_decomposition_matrix['total'], label='Total cost', color='#000000')
+                subplots_axs[0, 1].plot(cost_decomposition_matrix['length'], label='Length cost', color='#CC6666')
+                subplots_axs[0, 1].plot(cost_decomposition_matrix['perturbation'], label='Perturb. cost', color='#66CC66')
+                subplots_axs[0, 1].plot(cost_decomposition_matrix['degree'], label='Degree cost', color='#6666CC')
+                subplots_axs[0, 1].legend()
 
-            subplots_axs[1, 0].set_title('Pheromone multiplier')
-            subplots_axs[1, 0].hist([each_solution.pheromone_multiplier for each_solution in ant_colony.solutions])
-            subplots_axs[1, 1].set_title('Pheromone histogram')
-            subplots_axs[1, 1].hist(color_map)
+                subplots_axs[1, 0].set_title('Pheromone multiplier')
+                subplots_axs[1, 0].hist([each_solution.pheromone_multiplier for each_solution in ant_colony.solutions])
+                subplots_axs[1, 1].set_title('Pheromone histogram')
+                subplots_axs[1, 1].hist(color_map)
 
-            subplots_fig.savefig('result_plot.svg')
+                subplots_fig.savefig('result_plot.svg')
 
         else:
             outer_edges = deepcopy(full_thermograph)

@@ -22,6 +22,8 @@
 #
 
 import pickle
+
+import merge_topologies
 from all_classes import Namespace
 import os
 import os_util
@@ -198,7 +200,7 @@ class SavableState(Namespace):
             self.save_data()
 
     def update_pertubation_image(self, mol_a_name, mol_b_name, core_smarts=None, save=False, verbosity=0, **kwargs):
-        """ Generate mol images describing a pertubation between the ligand pair
+        """ Generate mol images describing a perturbation between the ligand pair
 
         :param str mol_a_name: name of the molecule A
         :param str mol_b_name: name of the molecule B
@@ -206,7 +208,6 @@ class SavableState(Namespace):
         :param bool save: automatically save data
         :param int verbosity: controls verbosity level
         """
-        # verbosity = 5
 
         self.ligands_data[mol_a_name].setdefault('images', {})
         self.ligands_data[mol_a_name]['images'].setdefault('perturbations', {})
@@ -240,6 +241,8 @@ class SavableState(Namespace):
         from rdkit.Chem.AllChem import Compute2DCoords, GenerateDepictionMatching2DStructure
 
         core_mol = rdkit.Chem.MolFromSmarts(core_smarts)
+        print(core_smarts)
+        core_mol.UpdatePropertyCache()
         Compute2DCoords(core_mol)
 
         for each_name, each_mol, other_mol in zip([mol_a_name, mol_b_name],
@@ -250,21 +253,35 @@ class SavableState(Namespace):
             # Draw mol with hydrogens
             draw_2d_svg = MolDraw2DSVG(300, 150)
             draw_2d_svg.drawOptions().addStereoAnnotation = True
-            not_common_atoms = [i.GetIdx() for i in each_mol.GetAtoms()
-                                if i.GetIdx() not in each_mol.GetSubstructMatch(core_mol)]
-            draw_2d_svg.DrawMolecule(each_mol, legend=each_name, highlightAtoms=not_common_atoms)
-            draw_2d_svg.FinishDrawing()
-            svg_data_hs = draw_2d_svg.GetDrawingText()
+            common_atoms = merge_topologies.get_substruct_matches_fallback(each_mol, core_mol, die_on_error=False,
+                                                                           verbosity=verbosity)
+            if not common_atoms:
+                draw_2d_svg.DrawMolecule(each_mol, legend=each_name)
+                draw_2d_svg.FinishDrawing()
+                svg_data_hs = draw_2d_svg.GetDrawingText()
+            else:
+                not_common_atoms = [i.GetIdx() for i in each_mol.GetAtoms() if i.GetIdx() not in common_atoms]
+                draw_2d_svg.DrawMolecule(each_mol, legend=each_name, highlightAtoms=not_common_atoms)
+                draw_2d_svg.FinishDrawing()
+                svg_data_hs = draw_2d_svg.GetDrawingText()
 
             # Draw mol without hydrogens
             draw_2d_svg = MolDraw2DSVG(300, 150)
             draw_2d_svg.drawOptions().addStereoAnnotation = True
             each_mol = rdkit.Chem.RemoveHs(each_mol)
-            not_common_atoms = [i.GetIdx() for i in each_mol.GetAtoms()
-                                if i.GetIdx() not in each_mol.GetSubstructMatch(rdkit.Chem.RemoveHs(core_mol))]
-            draw_2d_svg.DrawMolecule(each_mol, legend=each_name, highlightAtoms=not_common_atoms)
-            draw_2d_svg.FinishDrawing()
-            svg_data_nohs = draw_2d_svg.GetDrawingText()
+            common_atoms = merge_topologies.get_substruct_matches_fallback(each_mol,
+                                                                           rdkit.Chem.RemoveHs(core_mol),
+                                                                           die_on_error=False,
+                                                                           verbosity=verbosity)
+            if not common_atoms:
+                draw_2d_svg.DrawMolecule(each_mol, legend=each_name)
+                draw_2d_svg.FinishDrawing()
+                svg_data_nohs = draw_2d_svg.GetDrawingText()
+            else:
+                not_common_atoms = [i.GetIdx() for i in each_mol.GetAtoms() if i.GetIdx() not in common_atoms]
+                draw_2d_svg.DrawMolecule(each_mol, legend=each_name, highlightAtoms=not_common_atoms)
+                draw_2d_svg.FinishDrawing()
+                svg_data_nohs = draw_2d_svg.GetDrawingText()
 
             perturbation_imgs = self.ligands_data[each_name]['images']['perturbations']
             perturbation_imgs.setdefault(other_mol, {})[core_smarts] = {'2d_hs': svg_data_hs, '2d_nohs': svg_data_nohs}

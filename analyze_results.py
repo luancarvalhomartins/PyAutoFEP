@@ -861,13 +861,13 @@ def analyze_perturbation(perturbation_name=None, perturbation_data=None, gromacs
                                 ''.format(perturbation_name, perturbation_data['temperature'], temperature),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
-    elif 'temperature' in perturbation_data:
+    elif perturbation_data is not None and 'temperature' in perturbation_data:
         temperature = perturbation_data['temperature']
         os_util.local_print('Reading temperature from {}: {} K'
                             ''.format(perturbation_name, perturbation_data['temperature']),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
     else:
-        os_util.local_print('Temperature not found in {} and not given as and input option. Cannot continue.'
+        os_util.local_print('Temperature not found in {} and not given as an input option. Cannot continue.'
                             ''.format(perturbation_name),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
@@ -1170,7 +1170,7 @@ def collect_from_xvg(xvg_directory, unk_file='unk_matrix.pkl', temperature=None,
                                     'temperature from MD log in {}. Set temperature argument or config '
                                     'option. Analysis for this system will not be run.'
                                     ''.format(unk_file, xvg_directory, lambda0_run_dir),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                 return None
 
     xvg_input_files = glob(os.path.join(xvg_directory, 'lambda*.xvg'))
@@ -1178,6 +1178,11 @@ def collect_from_xvg(xvg_directory, unk_file='unk_matrix.pkl', temperature=None,
     os_util.local_print('Collecting data from {} xvg files in {} and saving to {}'
                         ''.format(len(xvg_input_files), xvg_directory, unk_file),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+    if not xvg_input_files:
+        os_util.local_print('No .xvg files found in {}. I will ignore this system an go on.'
+                            ''.format(xvg_directory),
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        return None
 
     data = dist.collect_results_from_xvg.process_xvg_to_dict(xvg_input_files, temperature=temperature)
     savedata = {'u_nk_data': data, 'read_files': data, 'temperature': temperature}
@@ -1194,65 +1199,66 @@ def get_data_from_unk_pkl(input_pkl, read_from_xvg='auto', verbosity=0):
     :param int verbosity: set the verbosity level
     """
 
-    with open(input_pkl, 'rb') as fh:
-        try:
+    try:
+        with open(input_pkl, 'rb') as fh:
             perturbation_data = pickle.load(fh)
-        except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError):
+    except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError, FileNotFoundError):
+        if read_from_xvg != 'auto':
+            os_util.local_print('Failed to read input file {}. Estimates and analysis for this system will not '
+                                'be run.'.format(input_pkl),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            return None
+    else:
+        from pickletools import genops
+        with open(input_pkl, 'rb') as fh2:
+            op, proto_ver, snd = next(genops(fh2))
+        if op.name != 'PROTO':
             if read_from_xvg != 'auto':
-                os_util.local_print('Failed to read input file {}. Estimates and analysis for this system will not '
-                                    'be run.'.format(input_pkl),
+                os_util.local_print('Could not validate {} file pickle version. In case of failure during file '
+                                    'reading, make sure pickle version is recent enough in respect to the '
+                                    'pickle version in the run node or run again with read_from_xvg=auto or always.'
+                                    ''.format(input_pkl),
                                     msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                 return None
         else:
-            from pickletools import genops
-            with open(input_pkl, 'rb') as fh2:
-                op, proto_ver, snd = next(genops(fh2))
-            if op.name != 'PROTO':
+            if pickle.HIGHEST_PROTOCOL < proto_ver:
                 if read_from_xvg != 'auto':
-                    os_util.local_print('Could not validate {} file pickle version. In case of failure during file '
-                                        'reading, make sure pickle version is recent enough in respect to the '
-                                        'pickle version in the run node or run again with read_from_xvg=auto or always.'
-                                        ''.format(input_pkl),
+                    os_util.local_print('Pickle protocol {} was used to create file {}, while current '
+                                        'maximum supported protocol is {}. Please, update your environment or run '
+                                        'again with read_from_xvg=auto or always. Estimates and analysis for this '
+                                        ' system will not be run.'
+                                        ''.format(proto_ver, input_pkl, pickle.HIGHEST_PROTOCOL),
                                         msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                     return None
             else:
-                if pickle.HIGHEST_PROTOCOL < proto_ver:
+                # Check for required fields on read data (do not check for temperature, as the user can select it
+                # using input)
+                if not ('u_nk_data' in perturbation_data and
+                        set(perturbation_data['u_nk_data']).issuperset({'converted_table',
+                                                                        'column_names', 'indexes'})):
                     if read_from_xvg != 'auto':
-                        os_util.local_print('Pickle protocol {} was used to create file {}, while current '
-                                            'maximum supported protocol is {}. Please, update your environment or run '
-                                            'again with read_from_xvg=auto or always. Estimates and analysis for this '
-                                            ' system will not be run.'
-                                            ''.format(proto_ver, input_pkl, pickle.HIGHEST_PROTOCOL),
-                                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                        os_util.local_print('Unexpected data structure in file {}. The fields read were {}.'
+                                            ' Estimates and analysis for this  system will not be run.'
+                                            ''.format(input_pkl, perturbation_data.keys()),
+                                            msg_verbosity=os_util.verbosity_level.warning,
+                                            current_verbosity=verbosity)
                         return None
                 else:
-                    # Check for required fields on read data (do not check for temperature, as the user can select it
-                    # using input)
-                    if not ('u_nk_data' in perturbation_data and
-                            set(perturbation_data['u_nk_data']).issuperset({'converted_table',
-                                                                            'column_names', 'indexes'})):
-                        if read_from_xvg != 'auto':
-                            os_util.local_print('Unexpected data structure in file {}. The fields read were {}.'
-                                                ' Estimates and analysis for this  system will not be run.'
-                                                ''.format(input_pkl, perturbation_data.keys()),
-                                                msg_verbosity=os_util.verbosity_level.warning,
-                                                current_verbosity=verbosity)
-                            return None
-                    else:
-                        return perturbation_data
+                    return perturbation_data
 
     collect_from_xvg(os.path.dirname(input_pkl), unk_file=os.path.basename(input_pkl), verbosity=0)
-    with open(input_pkl, 'rb') as fh:
-        try:
+
+    try:
+        with open(input_pkl, 'rb') as fh:
             perturbation_data = pickle.load(fh)
-        except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError):
-            os_util.local_print('Failed to read {} file and failed to recreate it by collecting data from xvg '
-                                'files. Estimates and analysis for this system will not be run.'
-                                ''.format(input_pkl),
-                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-            return None
-        else:
-            return perturbation_data
+    except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError, FileNotFoundError):
+        os_util.local_print('Failed to read {} file and failed to recreate it by collecting data from xvg '
+                            'files. Estimates and analysis for this system will not be run.'
+                            ''.format(input_pkl),
+                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+        return None
+    else:
+        return perturbation_data
 
 
 def dummy_hysteresis(g0):
@@ -1659,6 +1665,12 @@ if __name__ == '__main__':
             os_util.makedir(this_dir, parents=True, verbosity=arguments.verbose)
 
             perturbation_data = get_data_from_unk_pkl(files['pkl'])
+            if perturbation_data is None:
+                os_util.local_print('\u0394\u0394G predictions for {}\u00B1{} {} will not be run.'
+                                    ''.format(*key, system),
+                                    current_verbosity=arguments.verbose,
+                                    msg_verbosity=os_util.verbosity_level.warning)
+                continue
 
             kwargs = {'perturbation_name': '{}-{}'.format(*key), 'perturbation_data': perturbation_data,
                       'gromacs_log': files.setdefault('log', None), 'estimators_data': estimators_data,

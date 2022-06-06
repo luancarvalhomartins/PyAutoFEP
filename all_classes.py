@@ -119,10 +119,17 @@ class Namespace(OrderedDict):
         self[key] = value
 
     def __str__(self):
-        this_str = 'Namespace({})' \
-                   ''.format(', '.join(['{}={}'.format(k, v if len(str(v)) < 50
-                                        else '<{} object at {} with len {}>'
-                                             ''.format(v.__class__, hex(id(v)), len(v))) for k, v in self.items()]))
+        items_data = []
+        for k, v in self.items():
+            if len(str(v)) < 50:
+                items_data.append('{}={}'.format(k, v))
+            else:
+                try:
+                    items_data.append('<{} object at {} with len {}>'.format(v.__class__, hex(id(v)), len(v)))
+                except (TypeError, UnboundLocalError):
+                    items_data.append('<{} object at {}>'.format(v.__class__, hex(id(v))))
+
+        this_str = 'Namespace({})'.format(', '.join(items_data))
         return this_str
 
     def __repr__(self):
@@ -1813,6 +1820,23 @@ class MCSResult(dict):
 
 class PDBFile:
 
+    class PDBModel(list):
+        """ Index models in the PDB data """
+
+        def __init__(self, model_num=1):
+            super(PDBFile.PDBModel, self).__init__()
+            self.model_num = model_num
+
+        def __str__(self):
+            output_data = []
+            for each_line in self:
+                if isinstance(each_line, PDBFile.PDBAtom):
+                    output_data.append(each_line.to_line())
+                else:
+                    output_data.append(each_line)
+
+            return ''.join(output_data)
+
     class PDBResidue(list):
         """ Index atoms belonging to the same residue """
         def __init__(self, resname=''):
@@ -1867,7 +1891,7 @@ class PDBFile:
         def __init__(self, atom_line, line_num):
             self.line_num = line_num
             self.residue = None
-            atom_line = atom_line.ljust(80)
+            atom_line = atom_line.rstrip().ljust(80)
             self.record_name = atom_line[0:6]
             self.serial = int(atom_line[6:11])
             self.name = atom_line[12:16]
@@ -1895,6 +1919,7 @@ class PDBFile:
         """ Very simple class to read PDB files """
         self.atoms = []
         self.residues = []
+        self.models = []
         self.file_lines = []
         self.input_file = input_file
 
@@ -1910,6 +1935,7 @@ class PDBFile:
             self.file_lines = input_file
 
         new_res = True
+        current_model = None
         for line_num, each_line in enumerate(self.file_lines):
             if len(each_line) > 54 and (each_line[0:4] == 'ATOM' or each_line[0:6] == 'HETATM'):
                 try:
@@ -1928,8 +1954,29 @@ class PDBFile:
                     new_res = False
                 else:
                     self.residues[-1].append(this_atom)
+                    if current_model is not None:
+                        current_model.append(this_atom)
                 self.file_lines[line_num] = this_atom
 
+            elif len(each_line) >= 5 and each_line[0:5] == 'MODEL':
+                try:
+                    model_num = int(each_line[5:])
+                except ValueError as err:
+                    os_util.local_print('Failed to convert model number {} to an integer at line {} of pdb file {}.'
+                                        ''.format(each_line[5:], line_num, input_file),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise ValueError(err)
+                else:
+                    current_model = PDBFile.PDBModel(model_num=model_num)
+                    self.models.append(current_model)
+                    current_model.append(each_line)
+
+            else:
+                if current_model is not None:
+                    current_model.append(each_line)
+
+            if len(each_line) >= 6 and each_line[0:6] == 'ENDMDL':
+                current_model = None
             if len(each_line) >= 3 and each_line[0:3] == 'TER':
                 new_res = True
 
@@ -1950,7 +1997,7 @@ class PDBFile:
                 tmp_atom_list.append(each_line)
         self.atoms = tmp_atom_list
 
-    def to_file(self, output_file, output_connect=False):
+    def to_file(self, output_file=None, output_connect=False):
         output_data = []
         for each_line in self.file_lines:
             if (not output_connect) and isinstance(each_line, str) and each_line.startswith('CONECT'):
@@ -1961,8 +2008,11 @@ class PDBFile:
             else:
                 output_data.append(each_line)
 
-        with open(output_file, 'w') as fh:
-            fh.writelines(output_data)
+        if output_file:
+            with open(output_file, 'w') as fh:
+                fh.writelines(output_data)
+        else:
+            return output_data
 
     def __str__(self):
         fname = self.input_file if isinstance(self.input_file, str) else '<DataStream>'

@@ -25,12 +25,17 @@
 # openbabel 2.4.1
 import rdkit.Chem
 import numpy
-import pybel
 import pickle
+
+try:
+    from openbabel import pybel
+except ImportError:
+    import pybel
 
 from prepare_dual_topology import align_ligands
 
-dist_tolerance = 0.001
+dist_tolerance = 0.1
+loose_dist_tolerance = 1.0
 
 
 def extract_coordinates(each_mol):
@@ -52,7 +57,8 @@ def test_align_ligands_pdb1():
     with open('test_data/align_ligands_pdb/results_pdb1.pkl', 'rb') as fh:
         reference_position = pickle.load(fh)
     for each_name, each_mol in align_data.items():
-        assert (extract_coordinates(each_mol) - reference_position[each_name]).sum() < dist_tolerance
+        assert (numpy.square(extract_coordinates(each_mol)
+                             - reference_position[each_name])).sum() < loose_dist_tolerance
 
 
 def test_align_ligands_pdb2():
@@ -101,20 +107,21 @@ def test_align_ligands_superimpose1():
     result_file = 'test_data/align_ligands_superimpose/FXR_10_result.pdb'
 
     align_data = align_ligands(pybel.readfile('pdb', 'test_data/align_ligands_pdb/1dvwb_altered.pdb').__next__(),
-                               ligands_dict,
+                               ligands_dict, superimpose_loader_ligands=ligands_dict,
                                reference_pose_superimpose='test_data/align_ligands_superimpose/FXR_10_ref.mol2',
                                poses_reference_structure='test_data/align_ligands_pdb/1dvwb.pdb',
                                pose_loader='superimpose', verbosity=-1)
-
+    rdkit.Chem.MolToPDBFile(align_data['FXR_12'], 'fxr12_align.pdb')
     resultmol = adjust_query_properties(rdkit.Chem.MolFromPDBFile(result_file))
-    assert (GetBestRMS(resultmol, align_data['FXR_10'])) < 0.1
+    assert (GetBestRMS(resultmol, align_data['FXR_10'])) < dist_tolerance
     fxr12rms = GetBestRMS(resultmol, align_data['FXR_12'], map=[[(30, 0), (11, 1), (23, 2), (20, 3), (26, 35), (32, 34),
                                                                  (28, 6), (12, 7), (1, 8), (2, 9), (16, 10), (3, 11),
                                                                  (8, 12), (18, 13), (7, 14), (19, 15), (9, 16), (0, 17),
                                                                  (14, 18), (13, 19), (4, 27), (17, 28), (27, 29),
                                                                  (33, 30), (29, 31), (15, 32), (5, 33), (31, 5),
                                                                  (25, 4)]])
-    assert fxr12rms < 1
+
+    assert fxr12rms < loose_dist_tolerance
 
 
 def test_align_ligands_superimpose2():
@@ -135,14 +142,14 @@ def test_align_ligands_superimpose2():
                                pose_loader='superimpose', verbosity=-1)
     resultmol = adjust_query_properties(rdkit.Chem.MolFromPDBFile(result_file))
     rdkit.Chem.MolToPDBFile(align_data['FXR_10'], 'error_pdb_fxr10.pdb')
-    assert (GetBestRMS(resultmol, align_data['FXR_10'])) < 0.1
+    assert (GetBestRMS(resultmol, align_data['FXR_10'])) < dist_tolerance
     fxr12rms = GetBestRMS(resultmol, align_data['FXR_12'], map=[[(30, 0), (11, 1), (23, 2), (20, 3), (26, 35), (32, 34),
                                                                  (28, 6), (12, 7), (1, 8), (2, 9), (16, 10), (3, 11),
                                                                  (8, 12), (18, 13), (7, 14), (19, 15), (9, 16), (0, 17),
                                                                  (14, 18), (13, 19), (4, 27), (17, 28), (27, 29),
                                                                  (33, 30), (29, 31), (15, 32), (5, 33), (31, 5),
                                                                  (25, 4)]])
-    assert fxr12rms < 1
+    assert fxr12rms < loose_dist_tolerance
 
 
 def test_align_ligands_generic():

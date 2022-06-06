@@ -30,7 +30,8 @@ from collections import namedtuple
 import traceback
 from ast import literal_eval
 
-verbosity_level = namedtuple("VerbosityLevel", "error default warning info debug")(-1, 0, 1, 2, 3)
+verbosity_level = namedtuple("VerbosityLevel",
+                             "error default warning info debug extra_debug timing")(-1, 0, 1, 2, 3, 4, 5)
 
 
 def makedir(dir_name, error_if_exists=False, parents=False, verbosity=0):
@@ -97,7 +98,7 @@ def read_file_to_buffer(filename, die_on_error=False, return_as_list=False, erro
                 error_message += '\nCould not read file {} (and read_file_to_buffer wall called with ' \
                                  'die_on_error=False). Error was: {}'.format(filename, error)
             local_print(error_message, msg_verbosity=verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
+            raise error
         else:
             return False
     else:
@@ -278,7 +279,9 @@ def local_print(this_string, msg_verbosity=0, logfile=None, current_verbosity=0)
     verbosity_name_dict = {verbosity_level.error: 'ERROR',
                            verbosity_level.warning: 'WARNING',
                            verbosity_level.info: 'INFO',
-                           verbosity_level.debug: 'DEBUG'}
+                           verbosity_level.debug: 'DEBUG',
+                           verbosity_level.extra_debug: 'EXTRA_DEBUG',
+                           verbosity_level.timing: 'TIMING'}
 
     if current_verbosity >= msg_verbosity or msg_verbosity == verbosity_level.error:
         if msg_verbosity == verbosity_level.debug:
@@ -447,3 +450,83 @@ def file_copy(src, dest, follow_symlinks=True, error_if_exists=False, verbosity=
         local_print('Copying {} to {}'.format(src, dest),
                     current_verbosity=verbosity, msg_verbosity=verbosity_level.debug)
         return shutil.copy2(src, dest, follow_symlinks=follow_symlinks)
+
+
+def parse_simple_config_file(input_data, verbosity=0):
+    """ Parse a simple key=value config file or data using ConfigParser
+
+    Parameters
+    ----------
+    input_data : str
+        Path to a file or key:val data to be parsed
+    verbosity : int
+        Sets the verbosity level
+
+    Returns
+    -------
+    all_classes.Namespace
+        Values read, with types detected
+    """
+    from configparser import ConfigParser
+    from all_classes import Namespace
+
+    if not input_data:
+        return Namespace()
+
+    if isinstance(input_data, dict):
+        # input_data is a dict already, I won't further process it
+        return input_data
+
+    read_data = read_file_to_buffer(input_data, return_as_list=False, verbosity=verbosity)
+    if not read_data:
+        # input_data is not a filename, try to interpret as the config data itself
+        read_data = input_data
+
+    # Use config parser to process input
+    parser = ConfigParser()
+    parser.read_string("[dummy]\n" + read_data)
+    result_data = dict(parser.items('dummy'))
+    result_data = Namespace(recursive_map(detect_type, dict(result_data)))
+    return result_data
+
+
+from functools import wraps
+def _get_scope(f, args):
+    """Get scope name of given function."""
+    from inspect import getmodule
+    _scope = getmodule(f).__name__
+    # guess that function is a method of it's class
+    try:
+        if f.__name__ in dir(args[0].__class__):
+            _scope += '.' + args[0].__class__.__name__
+            _scope += '.' + f.__name__
+        else:
+            _scope += '.' + f.__name__
+    except IndexError:
+        _scope += '.' + f.__name__
+
+    return _scope
+
+
+def trace(f):
+    """Display argument and context call information of given function."""
+    @wraps(f)
+    def wrap_trace(*args, **kwargs):
+        local_print("Entering {} with: {} {}".format(_get_scope(f, args), args, kwargs),
+                    msg_verbosity=verbosity_level.debug, current_verbosity=kwargs.get('verbosity', 1))
+        return f(*args, **kwargs)
+    return wrap_trace
+
+def time(f):
+    """ Time the execution of a function """
+    from time import perf_counter
+    @wraps(f)
+    def wrap_time(*args, **kwargs):
+        t0 = perf_counter()
+        value = f(*args, **kwargs)
+        t1 = perf_counter()
+        local_print("Execution of {} took {:0.4f} seconds".format(_get_scope(f, args), t1 - t0),
+                    msg_verbosity=verbosity_level.timing, current_verbosity=5)
+        return value
+
+    return wrap_time

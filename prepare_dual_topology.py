@@ -24,8 +24,10 @@
 import argparse
 import os
 import shutil
+
+import rdkit.Chem
 import rdkit.Chem.rdMolAlign
-import pybel
+import rdkit.Chem.PropertyMol
 import subprocess
 import tempfile
 import time
@@ -33,14 +35,20 @@ import re
 import tarfile
 import configparser
 import itertools
+import multiprocessing
 from collections import OrderedDict
-from copy import copy
+
+from align_utils import align_protein
+
+try:
+    from openbabel import pybel
+except ImportError:
+    import pybel
 
 import all_classes
 import process_user_input
 import savestate_util
 import mol_util
-import align_utils
 import merge_topologies
 import os_util
 
@@ -768,26 +776,23 @@ def prepare_output_scripts_data(header_template=None, script_type='bash', submis
 
 
 def parse_input_molecules(input_data, verbosity=0):
-    """ Flexible reader for molecules. Tries to understand
+    """ Flexible reader for molecules. Tries to guess files/directory structure.
 
     :param [str, list, dict] input_data: data to be read
     :param int verbosity: set verbosity
     :rtype: dict
     """
 
-    os_util.local_print('Entering parse_input_molecules(input_data={}, verbosity={})'
-                        ''.format(input_data, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-
     if isinstance(input_data, str):
         # User provided a file name, tries to read it
         if os.path.splitext(input_data)[1] == '.pkl':
-            # Its a pickle file and must contain a dict, read it to input_data
+            # It's a pickle file and must contain a dict, read it to input_data
             import pickle
             try:
                 with open(input_data, 'rb') as fh:
                     temp_dict = pickle.load(fh)
-            except (FileNotFoundError, IOError, EOFError):
+                assert isinstance(temp_dict, dict)
+            except (FileNotFoundError, IOError, EOFError, AssertionError):
                 os_util.local_print('Failed to read the input file {}. It was guessed to be a pickle file from its '
                                     'extension.'
                                     ''.format(input_data),
@@ -797,9 +802,10 @@ def parse_input_molecules(input_data, verbosity=0):
                 input_data = temp_dict
         else:
             try:
+                # Is it a dir?
                 dir_data = os.listdir(input_data)
             except NotADirectoryError:
-                # It's a text file. Read and parse it.
+                # No, so it must be a text file. Read and parse it.
                 file_data = os_util.read_file_to_buffer(input_data, die_on_error=False, return_as_list=False,
                                                         error_message='Failed to read input ligand file',
                                                         verbosity=verbosity)
@@ -811,10 +817,19 @@ def parse_input_molecules(input_data, verbosity=0):
                 else:
                     input_data = temp_dict
             except FileNotFoundError:
-                os_util.local_print('Could not parse input ligand data "{}". Please see documentation'
-                                    ''.format(input_data),
-                                    current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
-                raise SystemExit(1)
+                # Last try: try to use glob to match the input files
+                from glob import glob
+                temp_list = glob(input_data)
+                if not input_data:
+                    os_util.local_print('Could not parse input ligand data "{}". Please see documentation'
+                                        ''.format(input_data),
+                                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+                    raise SystemExit(1)
+                else:
+                    # Because glob will return the full path, use basename to get only file names as ligand names
+                    input_data = {}
+                    [input_data.setdefault(os.path.splitext(os.path.basename(each_file))[0], []).append(each_file)
+                     for each_file in temp_list]
             else:
                 # Read the directory structure, add all files with the same name and different extensions to a value
                 # under key = filename to the dict, if a dir is found, add its contents to a value
@@ -839,7 +854,7 @@ def parse_input_molecules(input_data, verbosity=0):
     elif input_data is None:
         ligand_dict = {}
     else:
-        os_util.local_print('Failed to read molecules data from {}. Could not parse data with type {}.\nInput data '
+        os_util.local_print('Failed to read molecules data from {}. Could not parse data with type {}.'
                             ''.format(input_data, type(input_data)),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(-1)
@@ -863,24 +878,29 @@ def parse_poses_data(poses_data, no_checks=False, verbosity=0):
     if poses_data is None:
         return None
 
+    poses_data = parse_input_molecules(poses_data, verbosity=verbosity)
+
     temp_data = {}
     for each_name, each_data in poses_data.items():
         each_data = os_util.detect_type(each_data)
         if isinstance(each_data, str):
             temp_data[each_name] = each_data
         elif isinstance(each_data, list):
-            if no_checks:
-                os_util.local_print('More than one pose file read for ligand {}. Data read was "{}". Because you used '
-                                    '"no_checks", selecting the first one ({}) and going on.'
-                                    ''.format(each_name, each_data, each_data[0]),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            if len(each_data) == 1:
                 temp_data[each_name] = each_data[0]
             else:
-                os_util.local_print('More than one pose file read for ligand {}. Data read was "{}". Please, check '
-                                    'your input'
-                                    ''.format(each_name, each_data),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise SystemExit(-1)
+                if no_checks:
+                    os_util.local_print('More than one pose file read for ligand {}. Data read was "{}". Because you '
+                                        'used "no_checks", selecting the first one ({}) and going on.'
+                                        ''.format(each_name, each_data, each_data[0]),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    temp_data[each_name] = each_data[0]
+                else:
+                    os_util.local_print('More than one pose file read for ligand {}. Data read was "{}". Please, check '
+                                        'your input'
+                                        ''.format(each_name, each_data),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise SystemExit(-1)
         else:
             os_util.local_print('Failed to parse pose data for molecule {}. Read data "{}" as a {}, but this is not '
                                 'supported'.format(each_name, each_data, type(each_data)),
@@ -890,14 +910,30 @@ def parse_poses_data(poses_data, no_checks=False, verbosity=0):
     return temp_data
 
 
-def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verbosity=0):
+def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, threads=1, no_checks=False, verbosity=0):
     """ Parse input ligands data from a text file, a pickle file, a list, or a dict
 
-    :param [str, dict, list] input_ligands: input to be read
-    :param savestate_util.SavableState savestate_util: progress data
-    :param bool no_checks: ignore checks and try to keep going
-    :param int verbosity: sets the verbosity level
-    :rtype: dict
+    Parameters
+    ----------
+    input_ligands : str or list or dict
+        input to be read
+    parameterize : None or dict
+        Should ligands missing parameters be parameterized? If None, no parameterization will be done. If a dict is
+        passed, parameterization will de done using data from this dict. Note: if topology files are provided,
+        parameterization will not be done.
+    savestate_util : savestate_util.SavableState
+        progress data
+    threads : int
+        Use this many threads when running parallelized code. -1 selects serial code (not using multiprocessing), mainly
+        useful for debug. 0 selects the total available CPUs. Any other number sets the number of threads explicitily.
+    no_checks : bool
+        ignore checks and try to keep going
+    verbosity : int
+        sets the verbosity level
+
+    Returns
+    -------
+    dict
     """
 
     os_util.local_print('Entering parse_ligands_data(input_ligands={}, savestate_util={}, no_checks={}, verbosity={}))'
@@ -924,10 +960,30 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
             new_dict = {}
             for each_field in each_molecule:
                 this_ext = os.path.splitext(each_field)[1]
-                if this_ext in ['.mol2', '.mol']:
-                    temp_mol = rdkit.Chem.MolFromMol2File(each_field, removeHs=False) if this_ext == '.mol2' \
-                        else rdkit.Chem.MolFromMolFile(each_field, removeHs=False)
-                    if temp_mol is None:
+                if this_ext in ['.mol2', '.mol', '.sdf', '.pdb', '.pdbqt']:
+                    # These formats can be read using rdkit directly
+                    if this_ext == '.mol2':
+                        temp_mol = rdkit.Chem.MolFromMol2File(each_field, removeHs=False)
+                    elif this_ext == '.mol':
+                        temp_mol = rdkit.Chem.MolFromMolFile(each_field, removeHs=False)
+                    elif this_ext == '.sdf':
+                        temp_mol = [i for i in rdkit.Chem.SDMolSupplier(each_field) if i is not None]
+                        if len(temp_mol) > 1:
+                            os_util.local_print('More than one molecule read from SDF file {}. Currently, this is not '
+                                                'supported. Please, check your your input molecules and split, if '
+                                                'needed.'.format(each_field),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise SystemExit(-1)
+                        temp_mol = temp_mol[0]
+                    elif this_ext == '.pdb':
+                        # PDB and PDBQT are read using openbabel.
+                        temp_mol = mol_util.read_small_molecule_from_pdb(each_field)
+                    else:
+                        temp_mol = mol_util.read_small_molecule_from_pdbqt(each_field, verbosity=verbosity)
+
+                    # Molecule read, now some checks
+                    if temp_mol is None or not temp_mol:
                         os_util.local_print('Failed to read molecule {} as a {} file. Please, check your input.'
                                             ''.format(each_field, this_ext),
                                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
@@ -947,7 +1003,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                         temp_mol.SetProp('_Name', each_name)
 
-                    # Some checks for the ligand input
+                    # Some checks for the ligand structure
                     if not no_checks:
                         if len(rdkit.Chem.GetMolFrags(temp_mol)) > 1:
                             os_util.local_print('Molecule {} ({}) has {} fragments, which is not supported. Make sure '
@@ -974,24 +1030,9 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                                 current_verbosity=verbosity)
                             raise ValueError('Molecules having no 3D coordinates not supported.')
 
-                    new_dict['molecule'] = temp_mol
-                elif this_ext == '.pdb':
-                    if not no_checks:
-                        os_util.local_print('PDB format is not supported. In order to avoid bond-order '
-                                            'related problems, please, use a mol2 file. Alternatively, rerun with '
-                                            'no_checks to force reading of a PDB.',
-                                            msg_verbosity=os_util.verbosity_level.error,
-                                            current_verbosity=verbosity)
-                    else:
-                        os_util.local_print('You are using a PDB file for a ligand ({}). This is is likely a bad idea. '
-                                            'Because you used no_checks, I will try to use it anyway. Be aware that '
-                                            'bond orders, aromaticity, atoms types, charges and pretty much anything '
-                                            'else may be incorrectly detected.'
-                                            ''.format(each_field),
-                                            msg_verbosity=os_util.verbosity_level.error,
-                                            current_verbosity=verbosity)
-                        new_dict['molecule'] = rdkit.Chem.MolFromPDBFile(each_field, removeHs=False)
-                        temp_mol.SetProp('_Name', each_name)
+                    # Store mols as PropertyMol to allow pickling of properties
+                    new_dict['molecule'] = rdkit.Chem.PropertyMol.PropertyMol(temp_mol)
+
                 elif this_ext in ['.itp', '.atp', '.top', '.str']:
                     new_dict.setdefault('topology', []).append(each_field)
                 elif os.path.isdir(each_field):
@@ -1016,7 +1057,7 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
         ligand_dict = savestate_util['ligands_data']
         savestate_util.save_data()
 
-    # Check the data, convert if needed
+    # First, check the molecule data
     # TODO: do the .str->GROMACS conversion without a subprocess
     for each_name, each_data in ligand_dict.items():
         if 'molecule' not in each_data:
@@ -1026,6 +1067,32 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
                                 ''.format(each_name, ligand_dict, savestate_util['ligands_data']),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
+
+    if parameterize:
+        todo_names = []
+        todo_mols = []
+        for each_name, each_data in ligand_dict.items():
+            if 'topology' not in each_data or len(each_data['topology']) == 0:
+                todo_names.append(each_name)
+                todo_mols.append(each_data['molecule'])
+
+        os_util.local_print('Parameterizing the following ligands using {}: {}'.format(parameterize, todo_names),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        if len(todo_mols) > 0:
+            if threads == -1:
+                wrapper_fn_tmp = lambda args, kwargs: os_util.wrapper_fn(mol_util.parameterize_small_molecule,
+                                                                         args, kwargs)
+                param_data = map(wrapper_fn_tmp, [[i] for i in todo_mols], itertools.repeat(parameterize))
+            else:
+                with multiprocessing.Pool(threads) as thread_pool:
+                    param_data = os_util.starmap_unpack(mol_util.parameterize_small_molecule, thread_pool,
+                                                        [[i] for i in todo_mols], itertools.repeat(parameterize))
+
+            for each_name, new_top_files in zip(todo_names, param_data):
+                ligand_dict[each_name]['topology'] = new_top_files
+
+    for each_name, each_data in ligand_dict.items():
         if 'topology' not in each_data or len(each_data['topology']) == 0:
             os_util.local_print('Could not find topology data for ligand {}. Please check your input file or '
                                 'command line arguments.\n\tLigand data read is:\n\t{}\n\tData in saved state '
@@ -1080,8 +1147,10 @@ def parse_ligands_data(input_ligands, savestate_util=None, no_checks=False, verb
 
                 temp_mol = rdkit.Chem.MolFromMol2File(output_files['molecule'], removeHs=False)
                 if temp_mol is None:
-                    os_util.local_print('Failed to read molecule {} as a {} file. Please, check your input.'
-                                        ''.format(each_field, this_ext),
+                    os_util.local_print('Failed to read molecule {} as a {} file during internal conversion from '
+                                        'CHARMM to GROMACS topology files. Please, check your input or try to convert '
+                                        'manually.'
+                                        ''.format(each_name, '.mol2'),
                                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                     raise SystemExit(-1)
                 ligand_dict[each_name]['molecule'] = temp_mol
@@ -1230,143 +1299,6 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
             os_util.local_print(msg_string, msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
             protein_data.data['file_path'] = structure_file
             return protein_data
-
-
-def align_ligands(receptor_structure, poses_input=None, poses_reference_structure=None,
-                  pose_loader='generic', reference_pose_superimpose=None, superimpose_loader_ligands=None,
-                  ligand_residue_name='LIG', cluster_docking_data=None, save_state=False, verbosity=0, **kwargs):
-    """ Align ligands from a docking structure to the MD-equilibrated frame or the input structure
-
-    :param pybel.Molecule receptor_structure: md frame to be used in the alignment
-    :param dict poses_input: dict containing the ligands to be read, keys=names and values=file path (required for all
-                             loaders but superimpose loader)
-    :param str poses_reference_structure: reference structure in respect to poses
-    :param str pose_loader: format of the docking data ('pdb', 'autodock4', 'superimpose', 'generic')
-    :param str reference_pose_superimpose: use this file as reference pose (superimpose loader only)
-    :param dict superimpose_loader_ligands: molecules to be superimposed to reference
-    :param str ligand_residue_name: residue name for the ligand (PDB loader only)
-    :param [str, dict] cluster_docking_data: a file containing ligand names and the selected clusters to be used in the
-                                             FEP, if the file is absent or a ligand name is absent from file, cluster 1
-                                             will be used (autodock4 loader only)
-    :param savestate_utils.SavableState save_state: object with saved data
-    :param int verbosity: verbosity level
-    :rtype: rdkit.RWMol
-
-    """
-    # TODO: read data from other docking programs (eg: autodock-vina, rdock and dock 3.7)
-
-    for k, v in {'seq_align_mat': 'BLOSUM80', 'gap_penalty': -1}.items():
-        kwargs.setdefault(k, v)
-
-    if not poses_input and pose_loader not in ['superimpose']:
-        os_util.local_print('Missing poses_input, required for pose loader {}. Please, see manual'
-                            ''.format(arguments.pose_loader),
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        return False
-
-    if poses_reference_structure is None:
-        poses_reference_structure = receptor_structure
-        if pose_loader != 'pdb':
-            os_util.local_print('No poses_reference_structure supplied, using structure ({}) as reference '
-                                'macromolecular structure.'
-                                ''.format(receptor_structure.title),
-                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-
-    # Loads poses data
-    if pose_loader == 'pdb':
-        # This loader reads pdb files, selects a ligand using molecule name and align the ligands to the reference
-        # structure using the Ca from the receptor in each pdb.
-
-        os_util.local_print('Initial poses are being read from pdb files containing ligand and receptor structures',
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-
-        from docking_readers.generic_loader import read_reference_structure
-        from docking_readers.pdb_loader import extract_pdb_poses
-
-        docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
-        docking_mol_local = extract_pdb_poses(poses_input, docking_receptor_mol,
-                                              ligand_residue_name=ligand_residue_name, save_state=save_state,
-                                              verbosity=verbosity)
-
-    elif pose_loader == 'autodock4':
-        # This loader loads data from autodock4 output, it tries to detect results files and receptor, but can be given
-        # the actual file locations
-
-        os_util.local_print('Initial poses are being read from Autodock4 data {}'.format(poses_input),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-
-        from docking_readers.autodock4_loader import extract_autodock4_poses, extract_docking_receptor
-
-        docking_receptor_mol = extract_docking_receptor(poses_reference_structure, verbosity=verbosity)
-        docking_mol_local = extract_autodock4_poses(poses_input, cluster_docking_data, verbosity=verbosity)
-
-    elif pose_loader == 'superimpose':
-        # Superimpose a series of ligands into a pdb structure using rdkit functions
-
-        os_util.local_print('Initial poses are being generated by superimposition from data {}'.format(poses_input),
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-
-        from docking_readers.superimpose_loader import superimpose_poses
-        from docking_readers.generic_loader import read_reference_structure
-
-        if not reference_pose_superimpose:
-            os_util.local_print('Missing reference_pose_superimpose (config: poses_reference_pose_superimpose), '
-                                'required for pose loader superimpose. Please, see documentation',
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
-        if not superimpose_loader_ligands:
-            os_util.local_print('Missing superimpose_loader_ligands, required for pose loader superimpose. Please, '
-                                'see python reference.',
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
-
-        docking_mol_local = superimpose_poses(superimpose_loader_ligands, reference_pose_superimpose,
-                                              save_state=save_state, verbosity=verbosity, **kwargs)
-        docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
-
-    elif pose_loader == 'generic':
-        # A generic loader, which simply reads ligand files and a receptor file
-
-        os_util.local_print('Initial poses are being read using generic loader',
-                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-
-        from docking_readers.generic_loader import extract_docking_poses, read_reference_structure
-
-        docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
-        docking_mol_local = extract_docking_poses(poses_input, verbosity=verbosity)
-
-    else:
-        os_util.local_print('Unknown pose_loader {}. Please select among superimpose, pdb, autodock4 and '
-                            'generic'.format(pose_loader), msg_verbosity=os_util.verbosity_level.error,
-                            current_verbosity=verbosity)
-        return False
-
-    if verbosity == 0:
-        os_util.local_print('{:=^50}'.format(' Align poses '), msg_verbosity=os_util.verbosity_level.default,
-                            current_verbosity=verbosity)
-
-    align_data = align_utils.align_protein(docking_receptor_mol, receptor_structure,
-                                           seq_align_mat=kwargs['seq_align_mat'],
-                                           gap_penalty=kwargs['gap_penalty'], verbosity=verbosity)
-    centering_vector = align_data['centering_vector']
-    rot_vector_1d = align_data['rotation_matrix']
-    proteinmd_center = align_data['translation_vector']
-
-    docking_mol_transformed = {}
-    for ligand_name, each_ligand in docking_mol_local.items():
-        each_ligand = mol_util.rwmol_to_obmol(each_ligand, verbosity=verbosity)
-        each_ligand.Translate(centering_vector)
-        each_ligand.Rotate(pybel.ob.double_array(rot_vector_1d))
-        each_ligand.Translate(proteinmd_center)
-        ligand_mol = mol_util.obmol_to_rwmol(each_ligand, verbosity=verbosity)
-        docking_mol_transformed[ligand_name] = ligand_mol
-        os_util.local_print('Molecule {} aligned'.format(ligand_name),
-                            msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
-
-    os_util.local_print('A total of {} ligands were aligned.'.format(len(docking_mol_local)),
-                        msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-
-    return docking_mol_transformed
 
 
 def edit_itp(itp_filename):
@@ -2775,6 +2707,176 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
     return perturbation_map
 
 
+def align_ligands(receptor_structure, poses_input=None, poses_reference_structure=None, pose_loader='generic',
+                  reference_pose_superimpose=None, superimpose_loader_ligands=None, ligand_residue_name='LIG',
+                  cluster_docking_data=None, save_state=False, verbosity=0, **kwargs):
+    """ Align ligands from a docking structure to the MD-equilibrated frame or the input structure
+
+    :param pybel.Molecule receptor_structure: md frame to be used in the alignment
+    :param dict poses_input: dict containing the ligands to be read, keys=names and values=file path (required for all
+                             loaders but superimpose loader)
+    :param str poses_reference_structure: reference structure in respect to poses
+    :param str pose_loader: format of the docking data ('pdb', 'autodock4', 'vina', 'superimpose', 'generic')
+    :param str reference_pose_superimpose: use this file as reference pose (superimpose loader only)
+    :param dict superimpose_loader_ligands: molecules to be superimposed to reference
+    :param str ligand_residue_name: residue name for the ligand (PDB loader only)
+    :param [str, dict] cluster_docking_data: a file containing ligand names and the selected clusters to be used in the
+                                             FEP, if the file is absent or a ligand name is absent from file, cluster 1
+                                             will be used (autodock4 and vina loader only)
+    :param savestate_utils.SavableState save_state: object with saved data
+    :param int verbosity: verbosity level
+    :rtype: rdkit.RWMol
+
+    """
+    # TODO: read data from other docking programs (eg: rdock and dock 3.7)
+    import numpy
+    import rdkit.Chem.rdMolTransforms
+
+    # Defaults for aligning receptors, if needed
+    for k, v in {'seq_align_mat': 'BLOSUM80', 'gap_penalty': -1}.items():
+        kwargs.setdefault(k, v)
+
+    if not poses_input and pose_loader not in ['superimpose']:
+        os_util.local_print('Missing poses_input, required for pose loader {}. Please, see manual'
+                            ''.format(pose_loader),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+        return False
+
+    if poses_reference_structure is None:
+        poses_reference_structure = receptor_structure
+        if pose_loader != 'pdb':
+            os_util.local_print('No poses_reference_structure supplied, using structure ({}) as reference '
+                                'macromolecular structure.'
+                                ''.format(receptor_structure.title),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
+    # Loads poses data
+    if pose_loader == 'pdb':
+        # This loader reads pdb files, selects a ligand using molecule name and align the ligands to the reference
+        # structure using the Ca from the receptor in each pdb.
+
+        os_util.local_print('Initial poses are being read from pdb files containing ligand and receptor structures',
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        from docking_readers.generic_loader import read_reference_structure
+        from docking_readers.pdb_loader import extract_pdb_poses
+
+        docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
+        docking_mol_local = extract_pdb_poses(poses_input, docking_receptor_mol,
+                                              ligand_residue_name=ligand_residue_name, save_state=save_state,
+                                              verbosity=verbosity)
+
+    elif pose_loader == 'autodock4':
+        # This loader loads data from autodock4 output, it tries to detect results files and receptor, but can be given
+        # the actual file locations
+
+        os_util.local_print('Initial poses are being read from Autodock4 data {}'.format(poses_input),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        from docking_readers.autodock4_loader import extract_autodock4_poses, extract_docking_receptor
+
+        docking_receptor_mol = extract_docking_receptor(poses_reference_structure, verbosity=verbosity)
+        docking_mol_local = extract_autodock4_poses(poses_input, cluster_docking_data, verbosity=verbosity)
+
+    elif pose_loader == 'vina':
+        # This loader loads data from Vina/QVina2 pdbqt files
+
+        os_util.local_print('Initial poses are being read from Vina/QVina2 data {}'.format(poses_input),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        from docking_readers.autodock4_loader import extract_docking_receptor
+        from docking_readers.vina_loader import extract_vina_poses
+
+        docking_receptor_mol = extract_docking_receptor(poses_reference_structure, verbosity=verbosity)
+        docking_mol_local = extract_vina_poses(poses_input, cluster_docking_data, verbosity=verbosity)
+
+    elif pose_loader == 'superimpose':
+        # Superimpose a series of ligands into a pdb structure using rdkit functions
+
+        os_util.local_print('Initial poses are being generated by superimposition from data {}'.format(poses_input),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        from docking_readers.superimpose_loader import superimpose_poses
+        from docking_readers.generic_loader import read_reference_structure
+
+        if not reference_pose_superimpose:
+            os_util.local_print('Missing reference_pose_superimpose (config: poses_reference_pose_superimpose), '
+                                'required for pose loader superimpose. Please, see documentation',
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        if not superimpose_loader_ligands:
+            os_util.local_print('Missing superimpose_loader_ligands, required for pose loader superimpose. Please, '
+                                'see python reference.',
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+
+        docking_mol_local = superimpose_poses(superimpose_loader_ligands, reference_pose_superimpose,
+                                              save_state=save_state, verbosity=verbosity, **kwargs)
+        docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
+
+    elif pose_loader == 'generic':
+        # A generic loader, which simply reads ligand files and a receptor file
+
+        os_util.local_print('Initial poses are being read using generic loader',
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        from docking_readers.generic_loader import extract_docking_poses, read_reference_structure
+
+        docking_receptor_mol = read_reference_structure(poses_reference_structure, verbosity=verbosity)
+        docking_mol_local = extract_docking_poses(poses_input, verbosity=verbosity)
+
+    else:
+        os_util.local_print('Unknown pose_loader {}. Please select among superimpose, pdb, autodock4, vina and generic.'
+                            ''.format(pose_loader), msg_verbosity=os_util.verbosity_level.error,
+                            current_verbosity=verbosity)
+        return False
+
+    if verbosity == 0:
+        os_util.local_print('{:=^50}'.format(' Align poses '), msg_verbosity=os_util.verbosity_level.default,
+                            current_verbosity=verbosity)
+
+    align_data = align_protein(docking_receptor_mol, receptor_structure, seq_align_mat=kwargs['seq_align_mat'],
+                               gap_penalty=kwargs['gap_penalty'], verbosity=verbosity)
+    centering_vector = align_data['centering_vector']
+    rot_matrix = align_data['rotation_matrix']
+    proteinmd_center = align_data['translation_vector']
+
+    docking_mol_transformed = {}
+    for ligand_name, each_ligand in docking_mol_local.items():
+        # Compose the translation and rotation in a single 4-by-4 transformation matrix. Order is translate by
+        # centering_vector, then rotate by rot_matrix, then translate by proteinmd_center. See, eg
+        # https://www.brainvoyager.com/bv/doc/UsersGuide/CoordsAndTransforms/SpatialTransformationMatrices.html for an
+        # explanation of using 4-by-4 matrices.
+        current_matrix = mol_util.translation_to_4by4_mat(centering_vector)
+        current_matrix = mol_util.rotation_to_4by4_mat(rot_matrix) @ current_matrix
+        current_matrix = mol_util.translation_to_4by4_mat(proteinmd_center) @ current_matrix
+        if numpy.allclose(numpy.identity(4), current_matrix):
+            os_util.local_print('Molecule {} input was already aligned to receptor. Keeping input coordinates.'
+                                ''.format(ligand_name),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+        else:
+            # When I moved this function to align_utils.py, I started to get segfaults at this point when using
+            # openbabel 2.4. I think this has something to do with import orders.
+            rdkit.Chem.rdMolTransforms.TransformConformer(each_ligand.GetConformer(), current_matrix)
+
+        # Do some clean-up and assigning
+        rdkit.Chem.AssignStereochemistryFrom3D(each_ligand, replaceExistingTags=False)
+        rdkit.Chem.AssignAtomChiralTagsFromStructure(each_ligand, replaceExistingTags=False)
+        try:
+            each_ligand.GetProp('_Name')
+        except KeyError:
+            each_ligand.SetProp('_Name', 'Pose {}'.format(ligand_name))
+
+        docking_mol_transformed[ligand_name] = each_ligand
+        os_util.local_print('Molecule {} aligned'.format(ligand_name),
+                            msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
+
+    os_util.local_print('A total of {} ligands were aligned.'.format(len(docking_mol_local)),
+                        msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+    return docking_mol_transformed
+
+
 if __name__ == '__main__':
     Parser = argparse.ArgumentParser(description='Reads multiple topology and molecule files and a perturbation map, '
                                                  'then generates the perturbation inputs.')
@@ -2821,8 +2923,8 @@ if __name__ == '__main__':
     poses_loader = Parser.add_argument_group('poses_loader', 'Options related to the loading of initial ligand poses')
     poses_loader.add_argument('--poses_input', type=str, default=None,
                               help='Poses data to be read, if needed. See documentation.')
-    poses_loader.add_argument('--pose_loader', choices=['generic', 'pdb', 'superimpose', 'autodock4'], default=None,
-                              help='Select poses format to read. See manual for further details.')
+    poses_loader.add_argument('--pose_loader', choices=['generic', 'pdb', 'superimpose', 'autodock4', 'vina'],
+                              default=None, help='Select poses format to read. See manual for further details.')
     poses_loader.add_argument('--poses_reference_structure', type=str, default=None,
                               help='Reference poses structure, eg: docking receptor. Not used for pdb loader. If not '
                                    'supplied, the macromolecule from structure argument or option will be used.')
@@ -2906,6 +3008,21 @@ if __name__ == '__main__':
                          help='Absolute temperature of MD. (Default 298.15).')
     md_opts.add_argument('--md_length', type=float, default=None,
                          help='Simulation length, in ps. (Default: 5000.0 ps = 5.0 ns)')
+
+    param_opts = Parser.add_argument_group('parameterize_configuration',
+                                           'Options used to trigger and control automatic ligand parameterization')
+    param_opts.add_argument('--parameterize', type=str, default=None, choices=['acpype'],
+                            help='Selects automatic ligand parameterization using AcPYPE. '
+                                 'Default: do not parameterize ligands, throw an error when topologies are missing.')
+    param_opts.add_argument('--parameterize_charge', type=str, default=None, choices=['user', 'gas', 'bcc'],
+                            help='Select charge model for ligand parameterization. Default: use the default for select '
+                                 'method')
+    param_opts.add_argument('--parameterize_bin', type=str, default=None,
+                            help='Use this executable to parameterize ligands. Default: find in path.')
+    param_opts.add_argument('--parameterize_output_dir', type=str, default=None,
+                            help='Save ligand topologies to this directory. Default: save to $PWD.')
+    param_opts.add_argument('--parameterize_advanced_options', type=str, default=None,
+                            help='Pass these advanced options to the parameterization program.')
 
     ouput_opts = Parser.add_argument_group('Output configuration',
                                            'Options used to control the output scripts and directories')
@@ -3069,7 +3186,7 @@ if __name__ == '__main__':
     # TODO: alter this to support other systems
     mdp_data = {}
     if bool(arguments.complex_mdp) ^ bool(arguments.water_mdp):
-        os_util.local_print('If you use complex_mdp or water_mdp, you have to supply both. ',
+        os_util.local_print('If you use complex_mdp or water_mdp, you have to supply both.',
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
         raise SystemExit(1)
     elif arguments.complex_mdp and arguments.water_mdp:
@@ -3213,7 +3330,20 @@ if __name__ == '__main__':
     else:
         receptor_structure_mol = pybel.readfile('pdb', arguments.structure).__next__()
 
-    ligands_dict = parse_ligands_data(arguments.input_ligands, savestate_util=progress_data,
+    if arguments.parameterize:
+        input_parameterize = all_classes.Namespace(param_type=arguments.parameterize,
+                                                   executable=arguments.parameterize_bin,
+                                                   charge_method=arguments.parameterize_charge,
+                                                   output_dir=arguments.parameterize_output_dir)
+        arguments.parameterize_advanced_options = os_util.detect_type(arguments.parameterize_advanced_options,
+                                                                      test_for_dict=True)
+        if isinstance(arguments.parameterize_advanced_options, dict):
+            input_parameterize.update(arguments.parameterize_advanced_options)
+    else:
+        input_parameterize = None
+
+    ligands_dict = parse_ligands_data(arguments.input_ligands, parameterize=input_parameterize,
+                                      savestate_util=progress_data, threads=arguments.threads,
                                       no_checks=arguments.no_checks, verbosity=arguments.verbose)
 
     input_poses = os_util.detect_type(arguments.poses_input, test_for_dict=True, test_for_list=True,
@@ -3282,10 +3412,11 @@ if __name__ == '__main__':
                 perturbation_graph = progress_data['thermograph']['last_solution']
             except KeyError as error:
                 if error.args[0] == 'thermograph':
-                    os_util.local_print('Perturbation map data {} corrupt. Please, run generat_perturbation_map '
-                                        'or use perturbation_map argument or input file option. The following data was '
-                                        'read:\n{}'
-                                        ''.format(progress_data.data_file, progress_data.keys()),
+                    os_util.local_print('No map data found in {}. I need a perturbation map to continue. Please, run '
+                                        'generate_perturbation_map.py or use perturbation_map argument or input file '
+                                        'option. The following data was read from {}:\n{}'
+                                        ''.format(progress_data.data_file, progress_data.data_file,
+                                                  progress_data.keys()),
                                         msg_verbosity=os_util.verbosity_level.error,
                                         current_verbosity=arguments.verbose)
                     raise SystemExit(1)
@@ -3468,8 +3599,8 @@ if __name__ == '__main__':
         # Then embed it to the reference pose
         merged_data = merge_topologies.constrained_embed_dualmol(merged_data,
                                                                  rdkit.Chem.RemoveHs(poses_mol_data[state_a_name]),
-                                                                 mcs=this_custom_mcs, verbosity=arguments.verbose,
-                                                                 savestate=progress_data)
+                                                                 mcs=this_custom_mcs, mcs_type=arguments.mcs_type,
+                                                                 verbosity=arguments.verbose, savestate=progress_data)
 
         dual_topology_data = merged_data.dual_topology
 

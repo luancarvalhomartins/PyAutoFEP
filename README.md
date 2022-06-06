@@ -8,8 +8,15 @@ Furthermore, it aims to be as flexible as possible, giving the user great contro
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 
 ## Announcements
-**Support for OpenBabel 3.X to be added**<br/>
-I am working on updating support from OpenBabel 2.4 to OpenBabel 3.X version series. OpenBabel 2.4 was released back in 2016. The current 3.X series, released starting from Oct 2019 with 3.0, is strongly recomended. Backward compatibility with 2.4 ~~will not be~~ **will be** mantained. I will make sure add a note here when this change gets committed.
+**Commit _(yet to get a hash)_ (06.06.2022)**<br/>
+This commit brings three new major features: 
+- **OpenBabel 3.X is now supported**, along with backward compatibility with OpenBabel 2.4. Because OpenBabel 3 series is the one actively maintained upstream, all users are recommended to upgrade.
+- **Reading of poses from Vina (and derivatives) .pdbqt files.** `prepare_dual_topology.py` now accepts `pose_loader=vina` which reads .pdbqt files. Poses in a ligand file can be selected setting `poses_advanced_options` `cluster_docking_data` (see manual for more info).
+- **Automated parameterization of input ligands.** `prepare_dual_topology.py` can now run external small molecule parameterization tools automatically (using `parameterize` and related options, see manual for further info). Currently, the only parameterization software supported is [AcPYPE](https://github.com/alanwilter/acpype), but I hope others can be added soon. 
+ 
+Furthermore, this update fixes some bugs and improves 3D MCS code, which is now more robust. Two defaults changed: in `prepare_dual_topology.py`, `gmx_bin_run=gmx_mpi` is now the default, as a MPI-enabled `gmx` executable is required and GROMACS compiles a `gmx_mpi` when using MPI. Also, `generate_perturbation_map.py` now will not save full_graph.svg and result_plot.svg unless the verbosity is at least INFO. 
+
+As always, please, fill issues should you experience any problems.
 
 **Commit fe41f7d (19.01.2022)**<br/>
 This commit introduces a bunch of new features and code changes. Even though I tested newly implemented and rewritten code, **things may break**. Please, fill 
@@ -27,7 +34,7 @@ issues should you experience any problem. Main changes:
 - [rdkit](https://www.rdkit.org/) 2019.03+
 - [networkx](https://networkx.org) 2.X (1.X versions are not supported)
 - [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.6.0 & [pymbar](https://github.com/choderalab/pymbar) 3.0.5 OR [alchemlyb](https://github.com/alchemistry/alchemlyb) 0.3.0 & [pymbar](https://github.com/choderalab/pymbar) 3.0.3 (Because of https://github.com/choderalab/pymbar/issues/419)
-- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*. openbabel 3.X is not currently not supported, but eventually will)
+- [openbabel](http://openbabel.org/wiki/Main_Page) 2.4 or 3.X (sparsely used, mainly to load receptor files in *prepare_perturbation_map.py*.)
 - matplotlib (required only in *analyze_results.py*, optional in *generate_perturbation_map.py*)
 - numpy
 
@@ -54,9 +61,8 @@ conda activate PyAutoFEP
 
 # Install stuff
 conda install -c rdkit rdkit
-conda install -c openbabel openbabel # ver 3.X is not supported, make sure to install 2.4.X ver
+conda install -c conda-forge openbabel
 conda install matplotlib networkx pip
-
 # Use pip to install pymbar and alchemlyb
 pip install pymbar alchemlyb==0.6.0
 ```

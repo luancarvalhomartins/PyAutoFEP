@@ -21,9 +21,13 @@
 #
 #
 
-import pybel
 import rdkit.Chem.PropertyMol
 from time import strftime
+try:
+    from openbabel import pybel
+except ImportError:
+    import pybel
+
 
 import os_util
 from align_utils import align_protein
@@ -43,6 +47,12 @@ def extract_pdb_poses(poses_data, reference_structure, ligand_residue_name='LIG'
 
     os_util.local_print('{:=^50}\n{:<15} {:<20}'.format(' Poses read ', 'Name', 'File'),
                         msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
+
+    if verbosity < os_util.verbosity_level.extra_debug:
+        pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
+    else:
+        os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                            msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
 
     # Test for data from a previous run
     saved_pose_data = {}
@@ -121,7 +131,7 @@ def extract_pdb_poses(poses_data, reference_structure, ligand_residue_name='LIG'
                 # For was not broken, we did not find ligand_name
                 os_util.local_print('Could not find ligand molecule {} in file {} using the residue name {}. I have '
                                     'read the following residues: {}\n'
-                                    ''.format(ligand_name, ligand_dict, lig_residue,
+                                    ''.format(ligand_name, ligand_dict, ligand_residue_name,
                                               ', '.join([this_pdb_data.OBMol.GetResidue(i).GetName()
                                                          for i in range(this_pdb_data.OBMol.NumResidues())])),
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)

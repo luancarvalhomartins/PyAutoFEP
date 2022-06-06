@@ -22,9 +22,9 @@
 #
 
 import numpy
+
 import os_util
 from mol_util import obmol_to_rwmol
-from importlib import import_module
 
 
 def align_sequences_match_residues(mobile_seq, target_seq, seq_align_mat='BLOSUM80', gap_penalty=-1.0, verbosity=0):
@@ -144,9 +144,9 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
 
-        os_utils.local_print('Done reading and converting reference_mol {} and mobile_mol {}'
-                             ''.format(reference_mol_rwmol.GetProp('_Name'), mobile_mol_rwmol.GetProp('_Name')),
-                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+        os_util.local_print('Done reading and converting reference_mol {} and mobile_mol {}'
+                            ''.format(reference_mol_rwmol.GetProp('_Name'), mobile_mol_rwmol.GetProp('_Name')),
+                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
         # FIXME: implement this
         transformation_mat = rdkit.Chem.rdMolAlign.GetAlignmentTransform(reference_mol_rwmol, mobile_mol_rwmol)
@@ -154,8 +154,18 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
 
     elif align_method == 'openbabel':
         # FIXME: implement a Biopython-only method
-        from openbabel import OBAlign
-        import pybel
+        try:
+            from openbabel.openbabel import OBAlign
+            from openbabel import pybel
+        except ImportError:
+            import pybel
+            from openbabel import OBAlign
+
+        if verbosity < os_util.verbosity_level.extra_debug:
+            pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
+        else:
+            os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                                msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
 
         reference_mol_seq = reference_mol.write('fasta').split('\n', 1)[1].replace('\n', '')
         mobile_mol_seq = mobile_mol.write('fasta').split('\n', 1)[1].replace('\n', '')
@@ -195,19 +205,19 @@ def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align
         # Prepare translation and rotation matrices
         reference_mol_center = numpy.array([[a.GetX(), a.GetY(), a.GetZ()] for a in reference_mol_vec]).mean(0)
         mobile_mol_center = numpy.array([[a.GetX(), a.GetY(), a.GetZ()] for a in mobile_mol_vec]).mean(0)
-        translation_vector = pybel.ob.vector3(*reference_mol_center.tolist())
-        centering_vector = pybel.ob.vector3(*(-mobile_mol_center).tolist())
+        translation_vector = reference_mol_center
+        centering_vector = -mobile_mol_center
         rot_matrix = align_obj.GetRotMatrix()
-        rot_vector_1d = [rot_matrix.Get(i, j) for i in range(3) for j in range(3)]
+        rotation_matrix = numpy.reshape([rot_matrix.Get(i, j) for i in range(3) for j in range(3)], [3, 3])
 
         os_util.local_print('Alignment data:\n\tReference: {}\n\tMobile: {}\n\tCentering: {}\n\tTranslation: {}'
                             '\n\tRotation matrix:\n\t\t{}, {}, {}\n\t\t{}, {}, {}\n\t\t{}, {}, {}'
                             ''.format(reference_mol_center, mobile_mol_center, centering_vector, translation_vector,
-                                      *rot_vector_1d),
+                                      *[rot_matrix.Get(i, j) for i in range(3) for j in range(3)]),
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
         return {'centering_vector': centering_vector, 'translation_vector': translation_vector,
-                'rotation_matrix': rot_vector_1d}
+                'rotation_matrix': rotation_matrix}
 
     else:
         # TODO implement a internal alignment method

@@ -41,7 +41,7 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
                         ''.format(ligands_dict, verbosity),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    os_util.local_print('{:=^50}\n{:<15} {:<20}'.format(' Poses read ', 'Name', 'File'),
+    os_util.local_print('{:=^50}\n{:<15} {:<20} {:<20}'.format(' Poses read ', 'Name', 'File', 'Details'),
                         msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
 
     docking_mol_local = {}
@@ -49,17 +49,21 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
 
         if isinstance(each_mol, str):
             ligand_format = splitext(each_mol)[1].lower()
-            docking_mol_rd = generic_mol_read(ligand_format, each_mol, verbosity=verbosity)
+            docking_mol_rd = mol_util.generic_mol_read(each_mol, ligand_format=ligand_format, verbosity=verbosity)
+            each_mol = all_classes.Namespace({'filename': each_mol, 'comment': ''})
         elif isinstance(each_mol, all_classes.Namespace):
-            docking_mol_rd = generic_mol_read(each_mol.format, each_mol.data, verbosity=verbosity)
+            docking_mol_rd = mol_util.generic_mol_read(each_mol.data, ligand_format=each_mol.format,
+                                                       verbosity=verbosity)
         elif isinstance(each_mol, dict):
             if isinstance(each_mol['molecule'], rdkit.Chem.Mol):
                 docking_mol_rd = each_mol['molecule']
             else:
                 ligand_format = each_mol.setdefault('format', os.path.splitext(each_mol['molecule'])[1])
-                docking_mol_rd = generic_mol_read(ligand_format, each_mol['molecule'], verbosity=verbosity)
+                docking_mol_rd = mol_util.generic_mol_read(each_mol['molecule'], ligand_format=ligand_format,
+                                                           verbosity=verbosity)
         elif isinstance(each_mol, rdkit.Chem.Mol):
             docking_mol_rd = each_mol
+            each_mol = all_classes.Namespace({'comment': 'Read as rdkit.Chem.Mol'})
         else:
             os_util.local_print("Could not understand type {} (repr: {}) for your ligand {}"
                                 "".format(type(each_mol), repr(each_mol), each_name),
@@ -74,8 +78,9 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
 
             # docking_mol_local[each_name] = mol_util.rwmol_to_obmol(docking_mol_rd, verbosity=verbosity)
             docking_mol_local[each_name] = docking_mol_rd
-
-            os_util.local_print('{:<15} {:<18}'.format(each_name, str(each_mol)),
+            os_util.local_print('{:<15} {:<18} {:<18}'
+                                ''.format(each_name, each_mol.get('filename', str(each_mol)),
+                                          each_mol.get('comment', '')),
                                 msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
             os_util.local_print('Read molecule {} (SMILES: {}) from file {}'
                                 ''.format(each_name, rdkit.Chem.MolToSmiles(docking_mol_rd), each_mol),
@@ -86,10 +91,17 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
                                 'advised you to check your file and convert it to a valid mol2.'
                                 ''.format(str(each_mol)),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-            import pybel
+            try:
+                from openbabel import pybel
+            except ImportError:
+                import pybel
 
-            if verbosity < os_util.verbosity_level.debug:
+            if verbosity < os_util.verbosity_level.extra_debug:
                 pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
+            else:
+                os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                                    msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
+
             try:
                 if type(each_mol) == str:
                     ligand_format = splitext(each_mol)[1].lstrip('.').lower()
@@ -139,7 +151,16 @@ def read_reference_structure(reference_structure, verbosity=0):
     :rtype: pybel.OBMol
     """
 
-    import pybel
+    try:
+        from openbabel import pybel
+    except ImportError:
+        import pybel
+
+    if verbosity < os_util.verbosity_level.extra_debug:
+        pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
+    else:
+        os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                            msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
 
     os_util.local_print('Entering extract read_reference_structure(reference_structure={}, verbosity={})'
                         ''.format(reference_structure, verbosity),
@@ -148,7 +169,7 @@ def read_reference_structure(reference_structure, verbosity=0):
     if isinstance(reference_structure, pybel.Molecule):
         # Flag that we cannot know the file path, if it's not already present. OpenBabel MoleculeData mimics a dict,
         # but lacks a setdefault method, so we're doing this the dumb way
-        if not 'file_path' in reference_structure.data:
+        if 'file_path' not in reference_structure.data:
             reference_structure.data['file_path'] = False
         return reference_structure
 
@@ -171,42 +192,3 @@ def read_reference_structure(reference_structure, verbosity=0):
         return receptor_mol_local
 
 
-def generic_mol_read(ligand_format, ligand_data, verbosity=0):
-    """ Tries to read a ligand detecting formats and types
-
-    :param str ligand_format: data format or extension
-    :param [str, rdkit.Chem.Mol] ligand_data: data to be read
-    :param int verbosity: set verbosity
-    :rtype: rdkit.Chem.Mol
-    """
-
-    if isinstance(ligand_data, rdkit.Chem.Mol):
-        return ligand_data
-
-    if ligand_format in ['mol2', '.mol2']:
-        docking_mol_rd = rdkit.Chem.MolFromMol2Block(ligand_data, removeHs=False)
-        if docking_mol_rd is None:
-            docking_mol_rd = rdkit.Chem.MolFromMol2File(ligand_data, removeHs=False)
-    elif ligand_format in ['mol', '.mol']:
-        docking_mol_rd = rdkit.Chem.MolFromMolBlock(ligand_data, removeHs=False)
-        if docking_mol_rd is None:
-            docking_mol_rd = rdkit.Chem.MolFromMolFile(ligand_data, removeHs=False)
-    elif ligand_format in ['pdbqt', '.pdbqt', 'pdb', '.pdb']:
-        os_util.local_print('You are reading a pdb or pdbqt file ({}), which requires openbabel. Should this fail, you '
-                            'may try converting it to a mol2 before hand. This may be unsafe.'.format(ligand_data),
-                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-        import pybel
-        try:
-            ob_molecule = pybel.readstring('pdb', ligand_data)
-        except OSError:
-            ob_molecule = pybel.readfile('pdb', ligand_data).__next__()
-
-        docking_mol_rd = mol_util.obmol_to_rwmol(ob_molecule)
-
-    else:
-        os_util.local_print('Failed to read pose data from {} with type {}'
-                            ''.format(ligand_data, ligand_format),
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise SystemExit(1)
-
-    return docking_mol_rd
