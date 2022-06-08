@@ -2910,7 +2910,7 @@ if __name__ == '__main__':
                          help='Use this local Gromacs binary to prepare the system (Default: gmx)')
     gmx_opt.add_argument('--gmx_bin_run', type=str, default=None,
                          help='Use this Gromacs binary to run the MD. This should be the Gromacs bin in the run node,'
-                              'not in the current machine. (Default: gmx)')
+                              'not in the current machine. (Default: gmx_mpi)')
 
     mcs_opt = Parser.add_argument_group('MCS options', 'Options to control MCS between molecules')
     Parser.add_argument('--mcs_custom_mcs', type=str, default=None,

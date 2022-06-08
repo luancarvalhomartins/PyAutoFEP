@@ -1100,12 +1100,31 @@ def read_small_molecule_from_pdb(ligand_data, verbosity=0):
                 hs_params = rdkit.Chem.RemoveHsParameters()
                 hs_params.removeDegreeZero = True
                 read_mol = rdkit.Chem.RemoveHs(read_mol, hs_params)
-            read_mol = rdkit.Chem.AllChem.AssignBondOrdersFromTemplate(rdkit.Chem.MolFromSmiles(smiles), read_mol)
+            ref_mol = rdkit.Chem.MolFromSmiles(smiles)
+            if ref_mol is None:
+                os_util.local_print('Failed to convert SMILES string in molecule {}. SMILES is {}.'
+                                    ''.format(ligand_data if len(ligand_data) < 30
+                                              else '<{}-chr str>'.format(len(ligand_data)), smiles),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise ValueError
+
+            try:
+                read_mol = rdkit.Chem.AllChem.AssignBondOrdersFromTemplate(ref_mol, read_mol)
+            except ValueError as error:
+                os_util.local_print('Failed to match SMILES {} to molecule {}.'
+                                    ''.format(smiles,
+                                              ligand_data if len(ligand_data) < 30
+                                              else '<{}-chr str>'.format(len(ligand_data))),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise error
+
             read_mol = rdkit.Chem.AddHs(read_mol, addCoords=True, addResidueInfo=True)
             os_util.local_print('Bond orders in {} set to match the smiles {}.'
                                 ''.format(ligand_data if len(ligand_data) < 30
                                           else '<{}-chr str>'.format(len(ligand_data)), smiles),
                                 msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+            rdkit.Chem.AllChem.AssignStereochemistry(read_mol)
+            rdkit.Chem.AllChem.AssignStereochemistryFrom3D(read_mol, replaceExistingTags=False)
         else:
             # There was no SMILES line in the PDB file, cannot use AssignBondOrdersFromTemplate. Fallback to openbabel.
             read_mol = None
