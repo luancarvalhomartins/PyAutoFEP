@@ -570,6 +570,22 @@ def num_explict_hydrogens(mol):
     return sum([1 for i in mol.GetAtoms() if i.GetAtomicNum() == 1])
 
 
+def num_implicit_hydrogens(mol):
+    """Return the number of implicit hydrogens in the molecular graph
+
+    Parameters
+    ----------
+    mol : rdkit.Chem.Mol
+        Input molecule
+
+    Returns
+    -------
+    int
+    """
+
+    return sum([each_atom.GetNumImplicitHs() for each_atom in mol.GetAtoms()])
+
+
 def loose_replace_side_chains(mol, core_query, use_chirality=False, verbosity=True):
     """ Reconstruct a molecule based on common core. First, try to use the regular query. If fails, fallback to
         generalized bonds then generalized atoms.

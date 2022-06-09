@@ -3597,8 +3597,7 @@ if __name__ == '__main__':
                 this_solute_scaling_list = solute_scaling_list
 
         # Then embed it to the reference pose
-        merged_data = merge_topologies.constrained_embed_dualmol(merged_data,
-                                                                 rdkit.Chem.RemoveHs(poses_mol_data[state_a_name]),
+        merged_data = merge_topologies.constrained_embed_dualmol(merged_data, poses_mol_data[state_a_name],
                                                                  mcs=this_custom_mcs, mcs_type=arguments.mcs_type,
                                                                  verbosity=arguments.verbose, savestate=progress_data)
 

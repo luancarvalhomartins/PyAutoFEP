@@ -135,7 +135,6 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
     return new_conf_ids
 
 
-@os_util.trace
 def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_atoms=None, randomseed=2342,
                                   num_conformers=200, volume_function='tanimoto', rigid_molecule_threshold=1,
                                   num_threads=0, mcs=None, atom_map=None, save_state=None, verbosity=0, **kwargs):
@@ -191,7 +190,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                     ''.format(molecule.GetProp('_Name'), target.GetProp('_Name'), this_mcs),
                                     msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
             elif kwargs.get('mcs_type', 'graph') == '3d':
-                this_mcs = find_mcs_3d(molecule_a=rdkit.Chem.RemoveHs(molecule), molecule_b=rdkit.Chem.RemoveHs(target),
+                # 3D MCS requires hydrogens, so keep Hs here and remove them below
+                this_mcs = find_mcs_3d(molecule_a=molecule, molecule_b=target,
                                        num_threads=kwargs.get('num_threads', 0), verbosity=verbosity,
                                        savestate=save_state).smartsString
                 os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
@@ -212,6 +212,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                 ''.format(molecule.GetProp("_Name"), this_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
+        core_mol = rdkit.Chem.RemoveHs(core_mol)
 
         if core_mol.GetNumHeavyAtoms() == molecule.GetNumHeavyAtoms():
             try:
@@ -457,9 +458,8 @@ def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol
                                               this_mcs), msg_verbosity=os_util.verbosity_level.info,
                                     current_verbosity=verbosity)
             elif mcs_type == '3d':
-                this_mcs = find_mcs_3d(molecule_a=rdkit.Chem.RemoveHs(new_each_endpoint_molecule),
-                                       molecule_b=rdkit.Chem.RemoveHs(target), num_threads=num_threads,
-                                       verbosity=verbosity, savestate=savestate).smartsString
+                this_mcs = find_mcs_3d(molecule_a=new_each_endpoint_molecule, molecule_b=target,
+                                       num_threads=num_threads, verbosity=verbosity, savestate=savestate).smartsString
                 os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
                                     ''.format(new_each_endpoint_molecule.GetProp('_Name'), target.GetProp('_Name'),
                                               this_mcs),
@@ -1372,6 +1372,14 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
     kwargs.setdefault('boxSizeMult', 2.0)
     kwargs.setdefault('pruneRmsThresh', -1.0)
     kwargs.setdefault('maxAttempts', 100)
+
+    for each_mol in [molecule_a, molecule_b]:
+        if mol_util.num_implicit_hydrogens(each_mol) > 0:
+            os_util.local_print('Molecule {} (SMILES={}) passed to find_mcs_3d contains {} implicit hydrogens. '
+                                'find_mcs_3d should not be used on molecules with implicit hydrogens.'
+                                ''.format(each_mol, rdkit.Chem.MolToSmiles(each_mol),
+                                          mol_util.num_implicit_hydrogens(each_mol)),
+                                os_util.verbosity_level.warning, current_verbosity=verbosity)
 
     mols_frozenset = frozenset([rdkit.Chem.MolToSmiles(molecule_a), rdkit.Chem.MolToSmiles(molecule_b)])
     if savestate:
