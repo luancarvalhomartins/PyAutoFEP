@@ -517,6 +517,7 @@ def process_dummy_atoms(molecule, verbosity=0):
     return molecule
 
 
+@os_util.trace
 def adjust_query_properties(query_molecule, generic_atoms=False, ignore_charge=True, ignore_isotope=True, verbosity=0):
     """ Adjust query settings removing all charges, isotope, aromaticity and valence info from core_structure SMARTS
 
@@ -527,11 +528,6 @@ def adjust_query_properties(query_molecule, generic_atoms=False, ignore_charge=T
     :param int verbosity: controls the verbosity level
     :rtype: rdkit.Chem.Mol
     """
-
-    os_util.local_print('Entering adjust_query_properties(query_molecule={} (SMILES={}), generic_atoms={}, '
-                        'verbosity={})'
-                        ''.format(query_molecule, rdkit.Chem.MolToSmiles(query_molecule), generic_atoms, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     new_query_molecule = rdkit.Chem.Mol(query_molecule)
 
@@ -553,8 +549,8 @@ def adjust_query_properties(query_molecule, generic_atoms=False, ignore_charge=T
     new_query_molecule = rdkit.Chem.AdjustQueryProperties(new_query_molecule, query_m)
 
     os_util.local_print('The molecule {} (SMARTS={}) was altered by adjust_query_properties to {} (SMARTS={})'
-                        ''.format(query_molecule, rdkit.Chem.MolToSmiles(query_molecule),
-                                  new_query_molecule, rdkit.Chem.MolToSmiles(new_query_molecule)),
+                        ''.format(query_molecule, rdkit.Chem.MolToSmarts(query_molecule),
+                                  new_query_molecule, rdkit.Chem.MolToSmarts(new_query_molecule)),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     return new_query_molecule

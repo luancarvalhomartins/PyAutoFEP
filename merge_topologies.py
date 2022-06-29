@@ -32,7 +32,8 @@ import rdkit.Chem
 import rdkit.Chem.rdFMCS
 import rdkit.Chem.rdForceFieldHelpers
 import rdkit.ForceField.rdForceField
-from rdkit.Chem.AllChem import ConstrainedEmbed, DeleteSubstructs, ShapeProtrudeDist, ShapeTanimotoDist, AlignMol
+from rdkit.Chem.AllChem import ConstrainedEmbed, DeleteSubstructs, ShapeProtrudeDist, ShapeTanimotoDist, AlignMol, \
+    GetCrippenO3A, GetO3A
 from rdkit.Chem.AllChem import GetMolFrags
 
 import mol_util
@@ -135,6 +136,23 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
     return new_conf_ids
 
 
+def get_o3a_score(molecule_a, molecule_b, conf_a=-1, conf_b=-1, max_iters=0, **kwargs):
+    """ Wrapper for GetO3A
+    """
+    o3a_data = GetO3A(prbMol=molecule_a, refMol=molecule_b, prbCid=conf_a, refCid=conf_b, maxIters=max_iters,
+                      **kwargs)
+    return -o3a_data.Score()
+
+
+def get_crippen_o3a_score(molecule_a, molecule_b, conf_a=-1, conf_b=-1, max_iters=0, **kwargs):
+    """Wrapper for GetCrippenO3A
+    """
+    o3a_data = GetCrippenO3A(prbMol=molecule_a, refMol=molecule_b, prbCid=conf_a, refCid=conf_b, maxIters=max_iters,
+                             **kwargs)
+    return -o3a_data.Score()
+
+
+@os_util.trace
 def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_atoms=None, randomseed=2342,
                                   num_conformers=200, volume_function='tanimoto', rigid_molecule_threshold=1,
                                   num_threads=0, mcs=None, atom_map=None, save_state=None, verbosity=0, **kwargs):
@@ -212,6 +230,16 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                 ''.format(molecule.GetProp("_Name"), this_mcs),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
+
+        sanitize_return = rdkit.Chem.SanitizeMol(core_mol, catchErrors=True)
+        if sanitize_return != 0:
+            os_util.local_print('Could not sanitize common core between target mol and {}\nError {} when running '
+                                'rdkit.Chem.SanitizeMol\nThis is the molecule representing the common core between '
+                                'structures (without sanitization): {}'
+                                ''.format(molecule.GetProp("_Name"), sanitize_return,
+                                          rdkit.Chem.MolToSmiles(core_mol)),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
         core_mol = rdkit.Chem.RemoveHs(core_mol)
 
         if core_mol.GetNumHeavyAtoms() == molecule.GetNumHeavyAtoms():
@@ -232,15 +260,6 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
             constrained_embed_forcefield(molecule, target, core_conf_id=core_conf_id, randomseed=randomseed,
                                          atom_map=this_atom_map, num_conformations=1, **kwargs)
             return molecule
-
-        sanitize_return = rdkit.Chem.SanitizeMol(core_mol, catchErrors=True)
-        if sanitize_return != 0:
-            os_util.local_print('Could not sanitize common core between target mol and {}\nError {} when running '
-                                'rdkit.Chem.SanitizeMol\nThis is the molecule representing the common core between '
-                                'structures (without sanitization): {}'
-                                ''.format(molecule.GetProp("_Name"), sanitize_return,
-                                          rdkit.Chem.MolToSmiles(core_mol)),
-                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
         temp_core_structure = mol_util.loose_replace_side_chains(target, core_mol, use_chirality=True)
         if temp_core_structure is None:
@@ -275,6 +294,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                             ''.format(rdkit.Chem.MolToSmiles(core_mol)),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
+        core_mol = rdkit.Chem.RemoveHs(core_mol)
         core_mol = mol_util.adjust_query_properties(core_mol, verbosity=verbosity)
 
         # Prepare a coordinate map to supply to EmbedMultipleConfs
@@ -358,19 +378,34 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
         volume_function = ShapeProtrudeDist
     elif volume_function == 'tanimoto':
         volume_function = ShapeTanimotoDist
+    elif volume_function == 'o3a':
+        volume_function = get_o3a_score
+    elif volume_function == 'crippen_o3a':
+        volume_function = get_crippen_o3a_score
     elif isinstance(volume_function, Callable):
         # volume_function is already the function, do nothing
         pass
     else:
-        os_util.local_print('Shape similarity comparison "{}" not understood. Please, select from "protude" or '
-                            '"tanimoto".'.format(volume_function),
+        os_util.local_print('Shape similarity comparison "{}" not understood. Please, select from "protude", '
+                            '"tanimoto", "o3a" or "crippen_o3a".'.format(volume_function),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(1)
 
-    rms_list = [volume_function(molecule, target, conformer.GetId(), core_conf_id, gridSpacing=kwargs['gridSpacing'],
-                                vdwScale=kwargs['vdwScale'], stepSize=kwargs['stepSize'], maxLayers=kwargs['maxLayers'],
-                                ignoreHs=kwargs['ignoreHs'])
-                for conformer in molecule.GetConformers() if conformer.Is3D()]
+    if volume_function in [ShapeProtrudeDist, ShapeTanimotoDist]:
+        # Use extended specific extended options for ShapeProtrudeDist and ShapeTanimotoDist
+        rms_list = [volume_function(molecule, target, conformer.GetId(), core_conf_id,
+                                    gridSpacing=kwargs['gridSpacing'], vdwScale=kwargs['vdwScale'],
+                                    stepSize=kwargs['stepSize'], maxLayers=kwargs['maxLayers'],
+                                    ignoreHs=kwargs['ignoreHs'])
+                    for conformer in molecule.GetConformers() if conformer.Is3D()]
+    elif volume_function in [get_o3a_score, get_crippen_o3a_score]:
+        # Use extended specific extended options for GetO3A and GetCrippenO3A, which currently are none
+        rms_list = [volume_function(molecule, target, conformer.GetId(), core_conf_id)
+                    for conformer in molecule.GetConformers() if conformer.Is3D()]
+    else:
+        # The function signature is unknown, but it must at least accept the molecule objects and the conf ids
+        rms_list = [volume_function(molecule, target, conformer.GetId(), core_conf_id)
+                    for conformer in molecule.GetConformers() if conformer.Is3D()]
 
     # Find the index for best solution
     best_solution = rms_list.index(min(rms_list))
@@ -390,7 +425,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
 
 @os_util.trace
 def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol_conf_id=-1, randomseed=2342,
-                              num_conformers=10, volume_function='tanimoto', rigid_molecule_threshold=1,
+                              num_conformers=50, volume_function='tanimoto', rigid_molecule_threshold=1,
                               num_threads=0, mcs=None, mcs_type='graph', savestate=None, verbosity=0):
     """ Generates an embedding of a dual-topology pseudomolecule to target using MCS,
 
@@ -442,6 +477,8 @@ def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol
         # Unless save_state = None, this MCS will be loaded from it
         if mcs is not None:
             this_mcs = mcs
+        elif 'mcs' in pseudomolecule:
+            this_mcs = pseudomolecule.mcs
         else:
             try:
                 target.GetProp('_Name')
@@ -1019,6 +1056,16 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     #  Revert this to `'verbosity': verbosity > 2` when developers fix the bug upstream
     kwargs['verbose'] = False
 
+    # Dumb check for all molecules being the same, so the MCS is the SMILES of any of the molecules
+    if len(set([rdkit.Chem.MolToSmiles(each_mol) for each_mol in mol_list])) == 1:
+        os_util.local_print('find_mcs called with equal molecules (at least, equals bearing equivalent SMILES), so the '
+                            'MCS is the SMILES of the molecules itself. Returning {}.'
+                            ''.format(rdkit.Chem.MolToSmiles(mol_list[0])),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+        mcs_result = all_classes.MCSResult(rdkit.Chem.MolToSmiles(mol_list[0]), num_atoms=mol_list[0].GetNumAtoms(),
+                                           num_bonds=mol_list[0].GetNumBonds(), canceled=False)
+        return mcs_result
+
     if savestate:
         mols_frozenset = frozenset([rdkit.Chem.MolToSmiles(each_mol) for each_mol in mol_list])
         if 'mcs_dict' not in savestate:
@@ -1403,18 +1450,18 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
 
     # Prepare a MCS ignoring chirality. This will guide the selection of atoms viable to be included in the final MCS
     kwargs.update(matchChiralTag=False)
-    achiral_mcs = find_mcs([molecule_a, molecule_b], savestate=None, **kwargs)
+    achiral_mcs = find_mcs([molecule_a, molecule_b], savestate=None, verbosity=verbosity, **kwargs)
     os_util.local_print('Achiral MCS: {}'.format(achiral_mcs.smartsString),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     achiral_mcs_mol = rdkit.Chem.MolFromSmarts(achiral_mcs.smartsString)
 
     achiral_matches_a = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=achiral_mcs_mol,
-                                                       verbosity=verbosity)
+                                                       uniquify=False, verbosity=verbosity)
     achiral_matches_b = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=achiral_mcs_mol,
-                                                       verbosity=verbosity)
+                                                       uniquify=False, verbosity=verbosity)
 
-    mcs = find_mcs([molecule_a, molecule_b], savestate=None, matchChiralTag=True)
+    mcs = find_mcs([molecule_a, molecule_b], savestate=None, matchChiralTag=True, verbosity=verbosity)
     os_util.local_print('First chiral MCS: {}'.format(mcs.smartsString),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
@@ -1439,9 +1486,9 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
     for i in range(max_num_iter):
         # Try every possible match between the current MCS and each of the molecules
         m1_matches = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=mcs_history[-1],
-                                                    verbosity=verbosity)
+                                                    uniquify=False, verbosity=verbosity)
         m2_matches = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=mcs_history[-1],
-                                                    verbosity=verbosity)
+                                                    uniquify=False, verbosity=verbosity)
 
         os_util.local_print('Starting iteration {} (max = {}) of find_mcs_3d. There are {} possible matches between '
                             'molecules.'.format(i, max_num_iter, len(m1_matches)*len(m2_matches)),
@@ -1671,7 +1718,7 @@ def get_atom_map(molecule_a, molecule_b, core_mol, min_atom_map=None, multiple_m
     Raises
     ------
     KeyError
-        In case min_atom_map is given and it cannot be found in any of the combination of the matches, a KeyError will
+        In case min_atom_map is given, and it cannot be found in any of the combination of the matches, a KeyError will
         be raised
     """
 

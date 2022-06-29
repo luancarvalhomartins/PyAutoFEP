@@ -150,6 +150,7 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
 
     u_nk_after_first = u_nk.iloc[(u_nk.index.to_frame()['time'] >= first_frame).values]
 
+    # convergence_step maybe given as input, or automatically guessed from the MD length
     if isinstance(convergence_step, (int, float)):
         max_time = int(u_nk_after_first.index.to_frame()['time'].max())
         if convergence_step:
@@ -158,18 +159,20 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
             time_value_list = []
         time_value_list.append(max_time)
     elif convergence_step is None:
+        # Get the max MD time from the u_nk_after_first DataFrame, use it to determine convergence_step
         max_time = int(u_nk_after_first.index.to_frame()['time'].max())
-        if max_time > 5000:
-            convergence_step = 1000
+        if max_time > 25000:
+            convergence_step = 5000
         elif max_time > 15000:
             convergence_step = 2500
-        elif max_time > 25000:
-            convergence_step = 5000
+        elif max_time > 5000:
+            convergence_step = 1000
         else:
             convergence_step = 500
         time_value_list = list(numpy.arange(first_frame + convergence_step, max_time, convergence_step))
         time_value_list.append(max_time)
     elif callable(getattr(convergence_step, '__getitem__', None)):
+        # convergence_step is a list or tuple, use it directly as time_value_list
         time_value_list = list(convergence_step)
     else:
         os_util.local_print('convergence_step (value: {}) must be a list of float, but got type {}. Cannot continue.'
@@ -177,7 +180,7 @@ def convergence_analysis(u_nk, estimators=None, convergence_step=None, first_fra
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise TypeError('float or list expected, got {} instead'.format(type(convergence_step)))
 
-    os_util.local_print('Doing convergence analysis for the follwing times (in ps): {}'.format(time_value_list),
+    os_util.local_print('Doing convergence analysis for the following times (in ps): {}'.format(time_value_list),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     # Reverse each fep-lambda of u_nk_after_first, maintaining index, so the same
@@ -633,6 +636,11 @@ def plot_ddg_vs_time(forward_ddgs, reverse_ddgs, forward_ddg_errors, reverse_ddg
                      reverse_ddgs - reverse_ddg_errors, color=reverse_color, alpha=0.3, zorder=-5)
 
     ax.set_xlim(forward_timestep[0], forward_timestep[-1])
+    # In case Y axis would be too zoomed out, make sure it isn't, at cost of not showing parts of the figure. Hopefully,
+    # this will
+    y_lims = ax.get_ylim()
+    if y_lims[1] - y_lims[0] > 10:
+        ax.set_ylim(forward_ddgs[-1] - 5, forward_ddgs[-1] + 5)
     plt.yticks(fontsize=10)
     units = formatted_energy_units[energy_units].text
     ax.set_xlabel('Simulation time ({})'.format(formatted_time_units[time_units].text), fontsize=12)
@@ -1517,6 +1525,8 @@ if __name__ == '__main__':
                                      verbosity=arguments.verbose)
                     new_pkl_file = os.path.join(data_dir, each_entry, system, 'md', 'rerun', 'unk_matrix.pkl')
                     perturbations_unk_data.setdefault(each_entry, {}).__setitem__(system, {'pkl': new_pkl_file})
+                    if system not in found_systems:
+                        found_systems.append(system)
                 else:
                     os_util.local_print('Could not find result pkl file for {} run {}. Estimates and analysis for this '
                                         'system will not be run.',

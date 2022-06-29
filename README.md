@@ -8,7 +8,7 @@ Furthermore, it aims to be as flexible as possible, giving the user great contro
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 
 ## Announcements
-**Commit _(yet to get a hash)_ (06.06.2022)**<br/>
+**Commit 190bef6 (06.06.2022)**<br/>
 This commit brings three new major features: 
 - **OpenBabel 3.X is now supported**, along with backward compatibility with OpenBabel 2.4. Because OpenBabel 3 series is the one actively maintained upstream, all users are recommended to upgrade.
 - **Reading of poses from Vina (and derivatives) .pdbqt files.** `prepare_dual_topology.py` now accepts `pose_loader=vina` which reads .pdbqt files. Poses in a ligand file can be selected setting `poses_advanced_options` `cluster_docking_data` (see manual for more info).

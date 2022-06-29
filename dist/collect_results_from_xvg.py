@@ -88,7 +88,7 @@ def process_xvg_to_dict(input_files, temperature=298.15):
     # Prepare indexes and column names
     indexes = ['time', 'fep-lambda']
     column_names = indexes.copy()
-    [column_names.append(each_name) for each_name in potential_table]
+    [column_names.append(each_name) for each_name in sorted(potential_table.keys())]
 
     return {'column_names': column_names, 'indexes': indexes, 'converted_table': converted_table,
             'input_files': input_files, 'temperature': temperature}

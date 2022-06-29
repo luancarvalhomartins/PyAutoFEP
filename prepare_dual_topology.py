@@ -573,33 +573,58 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
 
 
 def prepare_output_scripts_data(header_template=None, script_type='bash', submission_args=None,
-                                custom_scheduler_resources=None, hrex_frequency=0, collect_type='bin', config_file=None,
-                                index_file='index.ndx', temperature=298.15, gmx_bin='gmx', n_jobs=1, run_before=None,
-                                run_after=None, scripts_templates='templates/output_files_data.ini',
-                                analysis_options=None, ligand_name='LIG', verbosity=0):
-    """ Prepare data to be used when generating the output scripts
+                                custom_scheduler_resources=None, additional_options=None, hrex_frequency=0,
+                                collect_type='bin', config_file=None, index_file='index.ndx', temperature=298.15,
+                                gmx_bin='gmx_mpi', n_jobs=1, run_before=None, run_after=None,
+                                scripts_templates='templates/output_files_data.ini', analysis_options=None,
+                                ligand_name='LIG', verbosity=0):
+    """Prepare data to be used when generating the output scripts
 
-    :param [str, list, dict] header_template: read headers from this file, from this list of files or from this dict
-    :param str script_type: type of output scripts
-    :param str submission_args: pass this arguments to submission executable
-    :param dict custom_scheduler_resources: if script_type is a scheduler, select this resources when submitting the
-                                            jobs
-    :param int hrex_frequency: attempt to exchange replicas every this much frames (Default: 0, no HREX)
-    :param str collect_type: select script or brinary used to collect rerun data; options: bin, python, no_collect (do
-                             not collect), or the path for a executable to be used to process.
-    :param str config_file: default output data configuration file - regular users do not need to set this (None: use
-                            internal default)
-    :param str index_file: index file to be used during runs and analysis
-    :param float temperature: absolute temperature of the sampling
-    :param str gmx_bin: use this gromacs binary on the run node
-    :param int n_jobs: use this many jobs during rerun, collect and analysis steps
-    :param str run_before: this will be run before everything else on the output, will detect if file
-    :param str run_after: this will be run before everything else on the output, will detect if file
-    :param str scripts_templates: read default templates from this file
-    :param dict analysis_options: extra options for analysis. Defaults {'skip_frames': 100, }
-    :param int verbosity: verbosity level
-    :param str ligand_name: use this as ligand name
-    :rtype: all_classes.Namespace
+    Parameters
+    ----------
+    header_template : str or list or dict
+        Read headers from this file, from this list of files or from this dict. None: selects the internal templates
+    script_type : str
+        Type of output scripts, one of dir, tgz, and bin
+    submission_args : str
+        Pass this arguments to the submission executable
+    custom_scheduler_resources : dict or None
+        If script_type is a scheduler, select this resources when submitting the jobs
+    additional_options : dict or None
+        Pass these additional options to the job scheduler, see manual for supported format
+    hrex_frequency : int
+        Attempt to exchange replicas every this much frames (Default: 0, no HREX)
+    collect_type : str
+        Select script or brinary used to collect rerun data; options: bin, python, no_collect (do not collect), or the
+        path for a executable to be used to process.
+    config_file : str
+        Default output data configuration file - regular users do not need to set this. None: use internal default.
+    index_file : str
+        Index file to be used during runs and analysis
+    temperature : float
+        Absolute temperature of the sampling
+    gmx_bin : str
+        Use this gromacs binary on the run node
+    n_jobs: int
+        Use this many jobs during rerun, collect and analysis steps
+    run_before : str
+        Run commands in this string or file before everything else on the run script.
+    run_after : str
+        Run commands in this string or file after everything else on the run script.
+    scripts_templates : str
+        Read default templates from this file. Default: use internal templates.
+    analysis_options : dict
+        Extra options to be used in analysis. Default: {'skip_frames': 100, }
+    ligand_name : str
+        Use this as ligand name. Warning: currently, setting this may break the run
+    verbosity : int
+        Sets the verbosity level
+
+    Returns
+    -------
+    all_classes.Namespace
+        A custom Namespace object containing: 'selfextracting_script', 'constantpart', 'header', 'submit_command',
+        'depend_string', 'collect_executables', 'pack_script', 'shebang', and 'parts'
     """
 
     if analysis_options is None:
@@ -620,6 +645,13 @@ def prepare_output_scripts_data(header_template=None, script_type='bash', submis
     if not isinstance(scripts_names, list):
         os_util.local_print('Failed to read the output sequence from file {}. This should not happen')
         raise SystemExit(-1)
+
+    additional_options = os_util.detect_type(additional_options, test_for_dict=True)
+    if additional_options and not isinstance(additional_options, dict):
+        os_util.local_print('Failed to read additional_options as a dict. Data read was: "{}"'
+                            ''.format(additional_options),
+                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+        raise ValueError('dict expected, got {}'.format(type(additional_options)))
 
     output_constantpart = all_classes.Namespace([(s, '') for s in scripts_names])
 
@@ -684,6 +716,7 @@ def prepare_output_scripts_data(header_template=None, script_type='bash', submis
             # Update defaults with user supplied resources
             outputscript_data['resources'].update({k: str(v) for k, v in custom_scheduler_resources.items()})
 
+    additional_options_data, options_str = None, None
     try:
         template_section = outputscript_data[script_type]
     except KeyError:
@@ -696,10 +729,27 @@ def prepare_output_scripts_data(header_template=None, script_type='bash', submis
         submit_command = template_section['submit_command']
         depend_string = template_section['depend_string']
         temp_str = template_section['header']
+        additional_options_data = os_util.detect_type(template_section['additional_options'], test_for_dict=True)
+        options_str = template_section['options_str']
+
         for each_substitution, each_value in outputscript_data['resources'].items():
             this_step, this_resource = each_substitution.split('_')
             if this_step == 'all':
                 temp_str = temp_str.replace('__{}__'.format(this_resource.upper()), str(each_value))
+
+        if additional_options:
+            for each_option, each_value in additional_options.items():
+                if each_option in additional_options_data:
+                    temp_str += '\n{} {}'.format(options_str,
+                                                 additional_options_data[each_option].replace('__VALUE__', each_value))
+                else:
+                    if each_option[0] != '-':
+                        if len(each_option) == 1:
+                            each_option = '-' + each_option
+                        else:
+                            each_option = '--' + each_option
+                    temp_str += '\n{} {} {}'.format(options_str, each_option, each_value)
+
         output_header = temp_str
 
     if header_template:
@@ -752,6 +802,20 @@ def prepare_output_scripts_data(header_template=None, script_type='bash', submis
         this_step, this_resource = each_substitution.split('_')
         if this_step == 'pack':
             temp_str = temp_str.replace('__{}__'.format(this_resource.upper()), str(each_value))
+
+    if options_str and additional_options_data and additional_options:
+        for each_option, each_value in additional_options.items():
+            if each_option in additional_options_data:
+                temp_str += '\n{} {}'.format(options_str,
+                                             additional_options_data[each_option].replace('__VALUE__', each_value))
+            else:
+                if each_option[0] != '-':
+                    if len(each_option) == 1:
+                        each_option = '-' + each_option
+                    else:
+                        each_option = '--' + each_option
+                temp_str += '\n{} {} {}'.format(options_str, each_option, each_value)
+
     pack = temp_str
     pack += '\n\n' + output_constantpart['pack']
 
@@ -1130,7 +1194,7 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                                             'that this may fail.'.format(str_file, mol2_file),
                                             msg_verbosity=os_util.verbosity_level.error,
                                             current_verbosity=verbosity)
-                        mol_util.obmol_to_rwmol(each_data['molecule']).write('mol2', mol2_file)
+                        mol_util.rwmol_to_obmol(each_data['molecule']).write('mol2', mol2_file)
                     else:
                         os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
                                             'correspondingly .mol2 file was found. A .mol2 file is required to convert '
@@ -2912,13 +2976,18 @@ if __name__ == '__main__':
                          help='Use this Gromacs binary to run the MD. This should be the Gromacs bin in the run node,'
                               'not in the current machine. (Default: gmx_mpi)')
 
-    mcs_opt = Parser.add_argument_group('MCS options', 'Options to control MCS between molecules')
+    mcs_opt = Parser.add_argument_group('MCS options', 'Options to control MCS, alignment, and superposition between '
+                                                       'molecules')
     Parser.add_argument('--mcs_custom_mcs', type=str, default=None,
                         help='Use this/these custom MCS between pairs. Can be either a string (so the same MCS '
                              'will be used for all pairs) or a dictionary (only pairs present in dictionary will use '
                              'a custom MCS)')
     Parser.add_argument('--mcs_custom_atommap', type=str, default=None,
                         help='Use these custom atoms map between pairs.')
+    Parser.add_argument('--align_shape_scoring_function', type=str, default=None,
+                        choices=['protude', 'tanimoto', 'o3a', 'crippen_o3a'],
+                        help='Use this function for scoring conformations for generating the dual-molecule positions. '
+                             'See the manual for details.')
 
     poses_loader = Parser.add_argument_group('poses_loader', 'Options related to the loading of initial ligand poses')
     poses_loader.add_argument('--poses_input', type=str, default=None,
@@ -3039,6 +3108,8 @@ if __name__ == '__main__':
     ouput_opts.add_argument('--output_resources', type=str, default=None,
                             help='Define custom resources to be requested to the scheduler (only applicable if '
                                  'output_template is not used, see documentation for details)')
+    ouput_opts.add_argument('--output_additional_options', type=str, default=None,
+                            help=' (only applicable if output_template is not used, see documentation for details)')
     ouput_opts.add_argument('--output_template', type=str, default=None,
                             help='Use contents of this file as headers for submission or run. If this option is '
                                  'omitted, default templates will be used. This can be used in conjunction with '
@@ -3509,6 +3580,7 @@ if __name__ == '__main__':
                                               script_type=arguments.output_scripttype,
                                               submission_args=arguments.output_submit_args,
                                               custom_scheduler_resources=arguments.output_resources,
+                                              additional_options=arguments.output_additional_options,
                                               hrex_frequency=arguments.hrex,
                                               collect_type=os_util.detect_type(arguments.output_collecttype,
                                                                                test_for_list=True),
@@ -3599,7 +3671,9 @@ if __name__ == '__main__':
         # Then embed it to the reference pose
         merged_data = merge_topologies.constrained_embed_dualmol(merged_data, poses_mol_data[state_a_name],
                                                                  mcs=this_custom_mcs, mcs_type=arguments.mcs_type,
-                                                                 verbosity=arguments.verbose, savestate=progress_data)
+                                                                 volume_function=arguments.align_shape_scoring_function,
+                                                                 num_threads=arguments.threads,
+                                                                 savestate=progress_data, verbosity=arguments.verbose)
 
         dual_topology_data = merged_data.dual_topology
 
@@ -3844,6 +3918,7 @@ if __name__ == '__main__':
                 fh.write(run_command + '\n')
                 fh.write('\n\necho "$(date): Starting rerun in {} {} at $(hostname)"\n\n'
                          ''.format(morph_dir, each_system))
+
                 fh.write(output_data['constantpart']['rerun'] + '\n')
                 fh.write('\n\necho "$(date): Starting collect in {} {} at $(hostname)"\n\n'
                          ''.format(morph_dir, each_system))
