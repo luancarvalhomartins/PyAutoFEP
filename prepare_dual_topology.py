@@ -3693,7 +3693,7 @@ if __name__ == '__main__':
                                                                  mcs=this_custom_mcs, mcs_type=arguments.mcs_type,
                                                                  volume_function=arguments.align_shape_scoring_function,
                                                                  num_threads=arguments.threads,
-                                                                 savestate=progress_data, verbosity=5)
+                                                                 savestate=progress_data, verbosity=arguments.verbose)
 
         dual_topology_data = merged_data.dual_topology
 
