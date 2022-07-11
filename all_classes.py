@@ -1748,12 +1748,12 @@ class DualTopologyData(TopologyData):
 
     def __str__(self, style='full'):
         if self._current_lambda_value is None:
-            raise RuntimeError("Call to __str__ before calling set_lambda_state")
+            self.set_lambda_state(lambda_value=0)
         return super().__str__(style=style)
 
 
 class MCSResult(dict):
-    """ Stores and MCS results and covert a MCS string transparently
+    """ Stores and MCS results and covert an MCS string transparently
     """
 
     def __init__(self, smarts_string, num_atoms=None, num_bonds=None, canceled=None):
@@ -2019,6 +2019,127 @@ class PDBFile:
         description = '<PDBFile {} with {} residues and {} atoms>'.format(fname, len(self.residues), len(self.atoms))
         return description
 
-mergedtopologies_class = namedlist('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
-                                                        'molecule_a', 'topology_a', 'molecule_b', 'topology_b',
-                                                        'dual_molecule_name'])
+
+# mergedtopologies_class = namedlist('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
+#                                                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b',
+#                                                         'dual_molecule_name'])
+class MergedTopologies(Namespace):
+    """Holds topology data for merged molecules and topologies
+    """
+
+    def __init__(self, dual_topology, dual_molecule, mcs, common_core_mol, molecule_a, topology_a, molecule_b,
+                 topology_b, dual_molecule_name):
+        super().__init__()
+        for k, v in zip(['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol', 'molecule_a', 'topology_a',
+                         'molecule_b', 'topology_b', 'dual_molecule_name'],
+                        [dual_topology, dual_molecule, mcs, common_core_mol, molecule_a, topology_a, molecule_b,
+                         topology_b, dual_molecule_name]):
+            self[k] = v
+
+    def to_pdb_block(self, molecule_name=None, confId=-1, verbosity=0):
+        """ Returns object as a PDB block
+
+        Parameters
+        ----------
+        molecule_name : str or None
+            Use this as molecule name (this will not overwrite data, only output PDB will be affected)
+        confId : int
+            Selects which conformation to output (-1 = default)
+        verbosity : int
+            Sets verbosity level
+
+        Returns
+        -------
+        str
+            PDB block representation of the molecule
+        """
+        from rdkit.Chem import MolToPDBBlock
+        from mol_util import adjust_query_properties
+
+        # Prepare PDB, do not print CONECT records
+        flavor = (2 | 8)
+        molecule_a_pdb = MolToPDBBlock(self.molecule_a, confId=confId, flavor=flavor).split('\n')
+
+        molecule_b_pdb = [each_line
+                          for each_line in MolToPDBBlock(self.molecule_b, confId=confId, flavor=flavor).split('\n')
+                          if each_line.find('HETATM') == 0 or each_line.find('ATOM') == 0]
+
+        # Suppress END record and empty line after molecule A
+        # TODO edit COMPND record?
+        return_list = molecule_a_pdb[:-2]
+
+        core_structure = adjust_query_properties(self.common_core_mol, verbosity=verbosity)
+
+        # Compute atoms present only in topology B
+        only_in_b = [each_atom.GetIdx()
+                     for each_atom in self.molecule_b.GetAtoms()
+                     if each_atom.GetIdx() not in
+                     self.molecule_b.GetSubstructMatch(core_structure)]
+
+        os_util.local_print('These are the atoms present only in topology B: {}'.format(only_in_b),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+        # Iterate over molecule_b_pdb, adding atoms present only in B to return_list. Use Idx + 1 to match PDB numbering
+        for each_atom, new_index in zip((each_line for idx, each_line in enumerate(molecule_b_pdb) if idx in only_in_b),
+                                        range(self.molecule_a.GetNumAtoms() + 1,
+                                              self.molecule_a.GetNumAtoms() + len(only_in_b) + 1)):
+            new_atom_line = each_atom[:6] + '{:>5}'.format(new_index) + each_atom[11:]
+            return_list.append(new_atom_line)
+
+        if molecule_name:
+            temp_pdb_data = []
+            for each_line in return_list:
+                if each_line.find('HETATM') == 0 or each_line.find('ATOM') == 0:
+                    each_line = each_line[:17] + '{:>3}'.format(molecule_name) + each_line[20:]
+                temp_pdb_data.append(each_line)
+            return_list = temp_pdb_data
+
+        return_list.extend(['TER', '\n'])
+
+        return '\n'.join(return_list)
+
+
+class MolecularTopologies(Namespace):
+    """Holds topology data for single molecules and topologies
+    """
+
+    def __init__(self, molecule_a, topology_a, dual_molecule_name):
+        super().__init__()
+        for k, v in zip(['dual_topology', 'dual_molecule', 'molecule_a', 'topology_a', 'dual_molecule_name'],
+                        [topology_a, molecule_a, molecule_a, topology_a, dual_molecule_name]):
+            self[k] = v
+
+    def to_pdb_block(self, molecule_name=None, confId=-1, verbosity=0):
+        """ Returns object as a PDB block
+
+        Parameters
+        ----------
+        molecule_name : str or None
+            Use this as molecule name (this will not overwrite data, only output PDB will be affected)
+        confId : int
+            Selects which conformation to output (-1 = default)
+        verbosity : int
+            Sets verbosity level
+
+        Returns
+        -------
+        str
+            PDB block representation of the molecule
+        """
+        from rdkit.Chem import MolToPDBBlock
+
+        # Prepare PDB, do not print CONECT records
+        flavor = (2 | 8)
+        return_list = MolToPDBBlock(self.molecule_a, confId=confId, flavor=flavor).split('\n')[:-2]
+
+        if molecule_name:
+            temp_pdb_data = []
+            for each_line in return_list:
+                if each_line.find('HETATM') == 0 or each_line.find('ATOM') == 0:
+                    each_line = each_line[:17] + '{:>3}'.format(molecule_name) + each_line[20:]
+                temp_pdb_data.append(each_line)
+            return_list = temp_pdb_data
+
+        return_list.extend(['TER', '\n'])
+
+        return '\n'.join(return_list)

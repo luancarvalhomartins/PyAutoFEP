@@ -141,41 +141,58 @@ def set_default_solvate_data(solvate_data):
     return solvate_data
 
 
+@os_util.trace
 def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='FullSystem.top',
                            index_file='index.ndx', forcefield=1, index_groups=None,
                            selection_method='internal', gmx_bin='gmx', extradirs=None, extrafiles=None,
                            solvate_data=None, ligand_name='LIG', water_mol_name=None, gmx_maxwarn=1, no_checks=False,
                            verbosity=0, **kwargs):
-    """ Builds a system using gmx tools
+    """Builds a system complex using gmx tools
 
-    :param str structure_file: receptor file (pdb)
-    :param str base_dir: basedir to build system to
-    :param all_classes.MergedTopologies ligand_dualmol: merged molecule to be added to the system
-    :param str topology: Gromacs-compatible topology file
-    :param str index_file: Gromacs-compatible index file
-    :param [int, str] forcefield: force field to be passed to pdb2gmx
-    :param dict index_groups: groups to be added to index file and their selection string
-    :param str selection_method: use gmx make_ndx (internal, default) or mdanalysis (mdanalysis) to generate index
-    :param str gmx_bin: gmx executable to be run
-    :param list extradirs: copy these dirs to base_dir
-    :param list extrafiles: copy these files to base_dir
-    :param dict solvate_data: dictionary containing further data to solvate: 'water_model': water model to be used,
-                              'water_shell': size of the water shell in A, 'ion_concentration': add ions to this conc,
-                              'pname': name of the positive ion, 'nname': name of the negative ion}
-    :param str ligand_name: use this as ligand name
-    :param [str, list] water_mol_name: use this a water molecule name
-    :param int gmx_maxwarn: passed to gmx grompp to suppress GROMACS warnings during system setup
-    :param bool no_checks: ignore checks and try to go on
-    :param int verbosity: sets verbosity
-    :rtype: all_classes.Namespace
+    Parameters
+    ----------
+    structure_file : str
+        Receptor file (PDB)
+    base_dir : str
+        Build system to this directory
+    ligand_dualmol : all_classes.MergedTopologies or all_classes.MolecularTopologies
+        Merged (all_classes.MergedTopologies) or single (all_classes.MolecularTopologies) molecule to be added to the
+         system. Method to_pdb_block will be called to obtain the small molecule pdb.
+    topology : str
+        GROMACS-compatible topology file will be saved to this file
+    index_file : str
+        GROMACS-compatible index file will be saved to this file
+    forcefield : str or int
+        Force field to be passed to pdb2gmx
+    index_groups : dict or None
+        Groups to be added to index file and their selection string
+    selection_method : str
+        Use gmx make_ndx (internal, default) or mdanalysis (mdanalysis) to generate index file
+    gmx_bin : str
+        Run this GROMACS executable to prepare the system
+    extradirs : list
+        Recursevely copy these directories to base_dir
+    extrafiles : list
+        Copy these files to base_dir
+    solvate_data : dict
+        Dictionary containing further data to solvate: 'water_model': water model to be used, 'water_shell': size of
+        the water shell in A, 'ion_concentration': add ions to this conc, 'pname': name of the positive ion,
+        'nname': name of the negative ion}
+    ligand_name : str
+        Use this as ligand name
+    water_mol_name : str or list
+        Use this a water molecule name
+    gmx_maxwarn : int
+        Pass this to gmx grompp -maxwarn to suppress GROMACS warnings during system setup
+    no_checks : bool
+        Ignore checks and try to go on
+    verbosity : int
+        Sets verbosity level
+
+    Returns
+    -------
+    all_classes.Namespace
     """
-
-    os_util.local_print('Entering prepare_complex_system(structure_file={}, ligand_dualmol={}, topology={}, '
-                        'index_file={}, forcefield={}, index_groups={}, selection_method={}, gmx_bin={}, extradirs={}, '
-                        'extrafiles={}, solvate_data={}, verbosity={})'
-                        ''.format(structure_file, ligand_dualmol, topology, index_file, forcefield, index_groups,
-                                  selection_method, gmx_bin, extradirs, extrafiles, solvate_data, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     if isinstance(water_mol_name, str):
         list(water_mol_name)
@@ -282,8 +299,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
 
     # 2.2 Add small molecule PDB
     # FIXME: remove the need for setting molecule_name
-    complex_string += '\n{}'.format(merge_topologies.dualmol_to_pdb_block(ligand_dualmol, molecule_name=ligand_name,
-                                                                          verbosity=verbosity))
+    complex_string += '\n{}'.format(ligand_dualmol.to_pdb_block(molecule_name=ligand_name, verbosity=verbosity))
 
     with open(build_files_dict['system_pdb'], 'w') as fh:
         fh.write(complex_string)
@@ -299,7 +315,11 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                                                      'when building the system.',
                                                        verbosity=verbosity)
 
-    ligand_dualmol.dual_topology.set_lambda_state(0)
+    try:
+        ligand_dualmol.dual_topology.set_lambda_state(0)
+    except AttributeError:
+        pass
+
     ligand_top = {'ligand.atp': ligand_dualmol.dual_topology.__str__('atomtypes'),
                   'ligand.itp': ligand_dualmol.dual_topology.__str__('itp')}
     for name, contents in ligand_top.items():
@@ -912,9 +932,10 @@ def parse_input_molecules(input_data, verbosity=0):
         # User provided a list. Read files from the list add all files with the same name and different extensions to
         # a value under key = filename to the dict
         ligand_dict = {}
-        [ligand_dict.setdefault(os.path.splitext(each_file)[0], []).append(each_file) for each_file in input_data]
+        [ligand_dict.setdefault(os.path.splitext(os.path.basename(each_file))[0], []).append(each_file)
+         for each_file in input_data]
     elif isinstance(input_data, dict):
-        ligand_dict = {str(k): v for k, v in input_data.items()}
+        ligand_dict = {str(os.path.splitext(os.path.basename(k))[0]): v for k, v in input_data.items()}
     elif input_data is None:
         ligand_dict = {}
     else:
@@ -974,6 +995,7 @@ def parse_poses_data(poses_data, no_checks=False, verbosity=0):
     return temp_data
 
 
+@os_util.trace
 def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, threads=1, no_checks=False, verbosity=0):
     """ Parse input ligands data from a text file, a pickle file, a list, or a dict
 
@@ -999,10 +1021,6 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
     -------
     dict
     """
-
-    os_util.local_print('Entering parse_ligands_data(input_ligands={}, savestate_util={}, no_checks={}, verbosity={}))'
-                        ''.format(input_ligands, savestate_util, no_checks, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     input_ligands = os_util.detect_type(input_ligands, test_for_dict=True, test_for_list=True, verbosity=verbosity)
 
@@ -1126,9 +1144,11 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
     for each_name, each_data in ligand_dict.items():
         if 'molecule' not in each_data:
             os_util.local_print('Could not find molecule data for ligand {}. Please check your input file or '
-                                'command line arguments.\n\tLigand data read is:\n\t{}\n\tData in saved state '
-                                'is:\n\t{}'
-                                ''.format(each_name, ligand_dict, savestate_util['ligands_data']),
+                                'command line arguments. You may want to use parameterize.\n\tLigand data read is:\n'
+                                '\t{}\n\tData in saved state is:\n\t{}'
+                                ''.format(each_name, ligand_dict,
+                                          savestate_util['ligands_data'] if savestate_util
+                                          else "< No saved state data >"),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
 
@@ -1159,9 +1179,11 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
     for each_name, each_data in ligand_dict.items():
         if 'topology' not in each_data or len(each_data['topology']) == 0:
             os_util.local_print('Could not find topology data for ligand {}. Please check your input file or '
-                                'command line arguments.\n\tLigand data read is:\n\t{}\n\tData in saved state '
-                                'is:\n\t{}'
-                                ''.format(each_name, ligand_dict, savestate_util['ligands_data']),
+                                'command line arguments. You may want to use parameterize.\n'
+                                '\tLigand data read is:\n\t{}\n\tData in saved state is:\n\t{}'
+                                ''.format(each_name, ligand_dict,
+                                          savestate_util['ligands_data'] if savestate_util
+                                          else "< No saved state data >"),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
         elif len(each_data['topology']) == 2:
@@ -1716,8 +1738,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     # Saves a dual topology molecule PDB to file
     # FIXME: remove the need for setting molecule_name
     with open(build_files_dict['ligand_pdb'], 'w') as fh:
-        fh.write(merge_topologies.dualmol_to_pdb_block(dual_molecule_ligand, molecule_name=ligand_name,
-                                                       verbosity=verbosity))
+        fh.write(dual_molecule_ligand.to_pdb_block(molecule_name=ligand_name, verbosity=verbosity))
 
     # Generates box around ligand and solvates it
     box_size = solvate_data['water_shell'] / 10.0
@@ -1908,7 +1929,7 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     """ Adds the ligand ligand_molecule to the pre-solvated structure input_structure_file, relying in info from
     index_file. If provided, a topology file can be edited to reflect changes.
 
-    :param merge_topologies.MergedTopologies ligand_molecule: molecule to be added
+    :param all_classes.MergedTopologies ligand_molecule: molecule to be added
     :param str input_structure_file: pre-solvated structure pdb file
     :param str output_structure_file: saves full structure to this file
     :param dict index_data: Gromacs-style index file (used to mark last protein atom from output_structure_file)
@@ -1927,8 +1948,7 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
 
     # Get the hydrid ligand as PDB
     # FIXME: remove the need for setting molecule_name
-    dual_topology_pdb = merge_topologies.dualmol_to_pdb_block(ligand_molecule, molecule_name=ligand_name,
-                                                              verbosity=verbosity)
+    dual_topology_pdb = ligand_molecule.to_pdb_block(molecule_name=ligand_name, verbosity=verbosity)
     dual_topology_pdb = all_classes.PDBFile(dual_topology_pdb.splitlines(keepends=True))
 
     # Get the last atom of the protein
@@ -2401,7 +2421,7 @@ def process_scaling_input(input_data, verbosity=0):
     return scaling_data
 
 
-def prepare_steps(lambda_value, lambda_dir, dir_list, topology_file, structure_file, index_file='index.ndx',
+def prepare_steps(lambda_value, lambda_dir, dir_list, morph_dir, topology_file, structure_file, index_file='index.ndx',
                   solute_scaling_list=None, solute_scaling_atoms_dict=None, scaling_bin=None, plumed_conf=None,
                   local_gmx_path='gmx', gmx_path='gmx', gmx_maxwarn=1, verbosity=0):
     """ Run Gromacs to minimize and equilibrate a system, if required, apply solute scaling
@@ -2953,7 +2973,7 @@ if __name__ == '__main__':
     Parser.add_argument('--index_string', type=str, default=None, help='Create this/these index group(s)')
     Parser.add_argument('--selection_method', choices=['mdanalysis', 'internal'], default=None,
                         help='Method to be used in the selection of water molecules (internal (default), mdanalysis)')
-    Parser.add_argument('--input_ligands', type=str, default=None,
+    Parser.add_argument('--input_ligands', type=str, default=None, nargs="*",
                         help='One of the following: (a) a file containing ligands names, mol2 and topology files; (b) '
                              'a dict structure containing ligands names, mol2 and topology files; (c) path to a '
                              'directory containing files named ligand_name.mol2 and ligand_name.top. I will also try '
@@ -3673,7 +3693,7 @@ if __name__ == '__main__':
                                                                  mcs=this_custom_mcs, mcs_type=arguments.mcs_type,
                                                                  volume_function=arguments.align_shape_scoring_function,
                                                                  num_threads=arguments.threads,
-                                                                 savestate=progress_data, verbosity=arguments.verbose)
+                                                                 savestate=progress_data, verbosity=5)
 
         dual_topology_data = merged_data.dual_topology
 
@@ -3866,6 +3886,7 @@ if __name__ == '__main__':
                 if arguments.solute_scaling == -1:
                     # No solute scaling
                     equilibration_output.append(prepare_steps(each_value, this_basedir, dir_mdp_list,
+                                                              morph_dir=morph_dir,
                                                               topology_file=topology_file,
                                                               structure_file=structure_file,
                                                               index_file=arguments.index,
@@ -3876,6 +3897,7 @@ if __name__ == '__main__':
                 else:
                     # User wants solute scaling
                     equilibration_output.append(prepare_steps(each_value, this_basedir, dir_mdp_list,
+                                                              morph_dir=morph_dir,
                                                               topology_file=topology_file,
                                                               structure_file=structure_file,
                                                               index_file=arguments.index, scaling_bin=scaling_bin,

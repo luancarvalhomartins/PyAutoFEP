@@ -241,7 +241,7 @@ class SavableState(Namespace):
         from rdkit.Chem.AllChem import Compute2DCoords, GenerateDepictionMatching2DStructure
 
         core_mol = rdkit.Chem.MolFromSmarts(core_smarts)
-        print(core_smarts)
+        # print(core_smarts)
         core_mol.UpdatePropertyCache()
         Compute2DCoords(core_mol)
 

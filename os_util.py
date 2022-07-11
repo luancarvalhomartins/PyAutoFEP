@@ -69,14 +69,25 @@ def makedir(dir_name, error_if_exists=False, parents=False, verbosity=0):
 
 
 def read_file_to_buffer(filename, die_on_error=False, return_as_list=False, error_message=None, verbosity=0):
-    """ Read and return file contents
+    """Read and return file contents
 
-    :param str filename: file to be read
-    :param bool die_on_error: throw an error if fails to read
-    :param bool return_as_list: return a list instead of str
-    :param str error_message: if die_on_error=True, print this message error instead of default one
-    :param int verbosity: sets th verbosity level
-    :rtype: [str,list,bool]
+    Parameters
+    ----------
+    filename : str
+        File to be read
+    die_on_error : bool
+        Throw an error if file cannot be read
+    return_as_list : bool
+        Return data as list. Default: return as str
+    error_message : str
+        If die_on_error=True, print this message error instead of default one
+    verbosity : int
+        Sets the verbosity level
+    Returns
+    -------
+    str or list or bool
+        If return_as_list is False, a str will be returned. If return_as_list is True, a list will be returned. If
+        die_on_error is False and the file cannot be read, False will be returned.
     """
 
     local_print('Entering read_file_to_buffer(filename={}, die_on_error={}, return_as_list={})'
@@ -467,6 +478,7 @@ def parse_simple_config_file(input_data, verbosity=0):
     all_classes.Namespace
         Values read, with types detected
     """
+
     from configparser import ConfigParser
     from all_classes import Namespace
 

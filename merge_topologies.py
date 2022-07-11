@@ -240,7 +240,10 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                           rdkit.Chem.MolToSmiles(core_mol)),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
-        core_mol = rdkit.Chem.RemoveHs(core_mol)
+        try:
+            core_mol = rdkit.Chem.RemoveHs(core_mol)
+        except rdkit.Chem.rdchem.AtomValenceException:
+            core_mol = rdkit.Chem.RemoveHs(core_mol, sanitize=False)
 
         if core_mol.GetNumHeavyAtoms() == molecule.GetNumHeavyAtoms():
             try:
@@ -1027,12 +1030,12 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
 
     # mergedtopologies_class ('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
     #                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b', 'dual_molecule_name'])
-    return all_classes.mergedtopologies_class(dual_topology, dual_molecule, common_core_smiles, core_structure,
-                                              molecule1, topology1, molecule2_embed, topology2,
-                                              '{}_{}'.format(molecule1.GetProp("_Name"), molecule2.GetProp("_Name")))
+    merged_data = all_classes.MergedTopologies(dual_topology, dual_molecule, common_core_smiles, core_structure,
+                                               molecule1, topology1, molecule2_embed, topology2,
+                                               '{}_{}'.format(molecule1.GetProp("_Name"), molecule2.GetProp("_Name")))
+    return merged_data
 
 
-#FIXME: implement MCS selection
 def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     """ Find the MCS between molecules in mol_list
 

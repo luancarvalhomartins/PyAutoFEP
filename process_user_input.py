@@ -51,24 +51,33 @@ def add_argparse_global_args(argparse_handler, verbosity=0):
                          help='Ignore all checks and try to go on (Default: off)')
     general.add_argument('-v', '--verbose', action='count',
                          help='Controls the verbosity level. -v: turns on some useful warnings; -vv: warnings + some '
-                              'furhter info; -vvv: warnings + info + LOTS of debug messages + rdkit messages; -vvvv: '
+                              'further info; -vvv: warnings + info + LOTS of debug messages + rdkit messages; -vvvv: '
                               'all the previous + (tons of) openbabel messages)')
     general.add_argument('--quiet', default=None, help='Be quiet', action='store_const', const=True)
 
 
 def read_options(argument_parser, unpack_section='', user_config_file=None, default_internal_file=None,
                  verbosity=0):
-    """ Process configuration files and command line arguments. Resolution order is arguments > user_config_file >
-        default_config_file.
+    """Process configuration files and command line arguments. Resolution order is arguments > user_config_file >
+     default_config_file.
 
-    :param argparse.ArgumentParser argument_parser: command line arguments to be processed
-    :param str unpack_section: unpack all variables from this section from user_config_file (if present) and
-                               default_config_file
-    :param str user_config_file: read this configuration file, takes precedence over default_config_file
-    :param str default_internal_file: read internal paths and vars from this file, this will not be superseeded by user
-                                      input
-    :param verbosity: set the verbosity level
-    :rtype: all_classes.Namedlist
+    Parameters
+    ----------
+    argument_parser : argparse.ArgumentParser
+        Command line arguments to be processed
+    unpack_section : str
+        Unpack all variables from this section from user_config_file (if present) and default_config_file
+    user_config_file : str
+        Read this configuration file, takes precedence over default_config_file
+    default_internal_file : str or dict
+        Read internal paths and vars from this file, this will not be superseeded by user input
+    verbosity : int
+        Sets verbosity level
+
+    Returns
+    -------
+    all_classes.Namespace
+        Processed data
     """
 
     os_util.local_print('Entering read_options(argument_parser={}, unpack_section={}, user_config_file={}, '
@@ -81,6 +90,10 @@ def read_options(argument_parser, unpack_section='', user_config_file=None, defa
         read_data = internals.read(os.path.join(os.path.dirname(__file__), 'config', 'internal.ini'))
     else:
         read_data = internals.read(default_internal_file)
+        if not read_data and isinstance(default_internal_file, configparser.ConfigParser):
+            # default_internal_file is a dictionary, not a input file
+            internals = default_internal_file
+            read_data = True
 
     if not read_data:
         os_util.local_print('Failed to read internal data file. Cannot continue. Check your install, this should not '
