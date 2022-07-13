@@ -1207,8 +1207,10 @@ def generic_mol_read(ligand_data, ligand_format=None, no_checks=False, verbosity
             read_mol_data = rdkit.Chem.MolFromMolFile(ligand_data, removeHs=False)
     elif ligand_format in ['pdb', '.pdb']:
         read_mol_data = read_small_molecule_from_pdb(ligand_data, verbosity=verbosity)
-
     else:
+        read_mol_data = None
+
+    if read_mol_data is None:
         if not no_checks:
             os_util.local_print('Failed to read pose data from {} with type {}'
                                 ''.format(ligand_data, ligand_format),

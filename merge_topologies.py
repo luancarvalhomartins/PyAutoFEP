@@ -242,7 +242,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
 
         try:
             core_mol = rdkit.Chem.RemoveHs(core_mol)
-        except rdkit.Chem.rdchem.AtomValenceException:
+        except (rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
             core_mol = rdkit.Chem.RemoveHs(core_mol, sanitize=False)
 
         if core_mol.GetNumHeavyAtoms() == molecule.GetNumHeavyAtoms():
@@ -1573,8 +1574,8 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
 
                 try:
                     core_fragments = GetMolFrags(this_core_mol, asMols=True, sanitizeFrags=False)
-                except (rdkit.Chem.rdchem.AtomKekulizeException,
-                        rdkit.Chem.rdchem.AtomValenceException) as error:
+                except (rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                        rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException) as error:
                     os_util.local_print('Failed to kekulize the core fragment. Error was: {}. Ignoring this fragment '
                                         'as a candidate for the 3D MCS. The MCS SMILES is {}'
                                         ''.format(error, rdkit.Chem.MolToSmiles(this_core_mol)),
