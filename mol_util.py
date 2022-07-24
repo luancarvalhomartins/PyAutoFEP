@@ -745,6 +745,7 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
     list
         List containing the generated topology files for this ligand
     """
+    from distutils.dir_util import copy_tree
 
     if not output_dir:
         output_dir = os.getcwd()
@@ -772,6 +773,9 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
         # acpype -i _file_ -c _string_ -n _int_ -a _string_
         if not executable:
             executable = 'acpype'
+
+        # Extra files to keep from the acpype result
+        keepfiles = kwargs.get('keepfiles', False)
 
         # Total charge is pre-calculated using rdkit. In case acpype guesses it wrong, topology would be wrong.
         cmd_line = [executable, '-i', ligand_file, '-n', str(rdkit.Chem.GetFormalCharge(input_molecule)), '-o', 'gmx',
@@ -851,6 +855,36 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
                 os_util.local_print('Copying {} to {}'.format(original_file, new_file),
                                     msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
                 top_files.append(new_file)
+
+            if keepfiles:
+                extra_original_files, extra_new_files = [], []
+                # Copy over the GAFF mol2 file
+                if 'mol2' in kwargs['keepfiles']:
+                    extra_original_files.append(os.path.join(result_dir,
+                                                             input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2'))
+                    extra_new_files.append(input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2')
+
+                # Copy the .acpype directory
+                if 'all' in kwargs['keepfiles']:
+                    extra_original_files.append(os.path.join(result_dir,
+                                                             input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2'))
+                    extra_new_files.append(input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2')
+
+                for each_original, each_new in zip(extra_original_files, extra_new_files):
+                    original_file = os.path.join(result_dir, each_original)
+                    new_file = os.path.join(output_dir, each_new)
+                    try:
+                        shutil.copy2(original_file, new_file)
+                    except IsADirectoryError:
+                        copy_tree(original_file, new_file)
+                    except FileNotFoundError as error:
+                        os_util.local_print('Extra file or dir {} not found after running AcPYPE. Parameterization may '
+                                            'have failed. AcPYPE return code was {} and output:\n{}\n{}'
+                                            ''.format(original_file, acpype_run.returncode, acpype_run.stdout,
+                                                      acpype_run.stderr),
+                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                        raise error
+
 
     # After writing the initial code below, I found out that, as of 2022.06.02, HTMD parameterize is no longer publicly
     # available (https://github.com/Acellera/htmd/issues/1029). I am keeping this code commented here in the hope that
