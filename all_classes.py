@@ -33,7 +33,7 @@ from copy import deepcopy
 
 def namedlist(typename, field_names, defaults=(), types=()):
     """ Returns a new subclass of list with named fields. Recipe by Sergey Shepelev at
-    http://code.activestate.com/recipes/578041-namedlist/ altered by Luan Carvalho Martins
+    https://code.activestate.com/recipes/578041-namedlist/ altered by Luan Carvalho Martins
 
     :param str typename: name of the class
     :param list field_names: list of fields
@@ -50,7 +50,7 @@ def namedlist(typename, field_names, defaults=(), types=()):
             raise TypeError("Expected {} types, got {}".format(len(types), fields_len))
 
     class ResultType(list):
-        __slots__ = ()
+        __slots__ = ('_parent', )
         _fields = field_names
 
         def _fixed_length_error(*args, **kwargs):
@@ -81,6 +81,7 @@ def namedlist(typename, field_names, defaults=(), types=()):
             return "{typename}({items})".format(typename=typename, items=items_repr)
 
         def __init__(self, *args, **kwargs):
+            self._parent = None
             self.extend([None] * fields_len)
             if len(args) + len(kwargs) + len(defaults) < len(field_names):
                 raise TypeError("__init__() missing {} required arguments"
@@ -98,6 +99,9 @@ def namedlist(typename, field_names, defaults=(), types=()):
 
         def __deepcopy__(self, memodict={}):
             return self.__class__(**{k: v for k, v in zip(field_names, self)})
+
+        def keys(self):
+            return self._fields[:]
 
     ResultType.__name__ = typename
 
@@ -527,20 +531,51 @@ class TopologyData:
                 self.n_fields = n_fields
                 super().__init__(args)
 
+            def check_a_b_topology(self, item):
+                """Checks for the equivalence of A and B parameters for item
+
+                Parameters
+                ----------
+                item : object
+                    Term to check
+
+                Returns
+                -------
+                bool
+                """
+
+                # Get field names
+                atom_fields = item.keys()[:self.n_fields]
+
+                # Test that parameters A and B are the same
+                get_a_b_terms = {i.replace('_A', '').replace('_B', '')
+                                 for i in item.keys()
+                                 if i not in atom_fields + ['function', 'comments']}
+                if not all((item.__getattribute__('{}_A'.format(i)) == item.__getattribute__('{}_B'.format(i))
+                            for i in get_a_b_terms)):
+                    return False
+                else:
+                    return True
+
+            def append(self, x):
+                super().append(x)
+                x._parent = self
+
         class MolNameDummy(str):
             """ Super dummy class to return molecule name line """
 
-            def __init__(self, parent_class, molecule_name='LIG'):
+            def __init__(self, parent_class, molecule_name='LIG', nrexcl=3):
                 self.parent_class = parent_class
                 super().__init__()
                 self._name = molecule_name
+                self._nrexcl = nrexcl
 
             def __str__(self):
                 try:
-                    return '{:<10} 3'.format(self.parent_class.name) if self.parent_class.name \
-                        else '{:<10} 3'.format(self._name)
+                    return '{:<10} {}'.format(self.parent_class.name, self._nrexcl) if self.parent_class.name \
+                        else '{:<10} {}'.format(self._name, self._nrexcl)
                 except (UnboundLocalError, AttributeError):
-                    return '{:<10} 3'.format(self._name)
+                    return '{:<10} {}'.format(self._name, self._nrexcl)
 
         @property
         def num_atoms(self):
@@ -589,6 +624,7 @@ class TopologyData:
             self.angles_dict = self.DataHolder(n_fields=3)
             self.dihe_dict = self.DataHolder(n_fields=4)
             self.constraints_dict = self.DataHolder(n_fields=2)
+            self.settles_dict = self.DataHolder(n_fields=1)
             self.vsites2_dict = self.DataHolder(n_fields=3)
             self.vsites3_dict = self.DataHolder(n_fields=4)
             self.vsites4_dict = self.DataHolder(n_fields=5)
@@ -615,28 +651,46 @@ class TopologyData:
         @staticmethod
         # TODO: automatically detect what are indexes and parameters and format accordingly
         def _format_inline(index_list, parameter_list=None, comment='', align_size=7):
-            """ Formats an parameter line
+            """Formats an parameter line
 
-            :param list index_list: list of indexes
-            :param list parameter_list: list of parameters, if present
-            :param str comment: inline comment, if any
-            :param int align_size: column size for parameters_list, if present, for index_list otherwise if
-                                   parameter_list=None.
-            :rtype: str
+            Parameters
+            ----------
+            index_list : list
+                list of indexes
+            parameter_list : list
+                list of parameters, if present
+            comment : str
+                inline comment, if any
+            align_size : int
+                column size for parameters_list, if present, for index_list otherwise if parameter_list=None
+
+            Returns
+            -------
+            str
+                Returns the formatted term line
             """
 
             if parameter_list is not None:
-                inline_param_str = ('{:<3} ' * len(index_list)).format(*index_list)
-                inline_param_str += ('{:<{align_size}} ' * len(parameter_list)).format(*parameter_list,
-                                                                                       align_size=align_size)
+                terms = [index_list.__getattribute__(i) for i in index_list.keys()[:index_list._parent.n_fields + 1]]
+                terms += [index_list.__getattribute__(i) for i in parameter_list]
+                inline_param_str = ('{:<{align_size}} ' * len(terms)).format(*terms, align_size=align_size)
             else:
-                if not comment and isinstance(index_list[-1], str):
-                    comment = index_list[-1]
-                    inline_param_str = ('{:<{align_size}} ' * (len(index_list) - 1)).format(*index_list[:-1],
-                                                                                            align_size=align_size)
+                # Test if this term holds topology A and B data, if so, print only top A
+                if index_list.__class__.__name__ in ["BondDataDual", "AngleDataDual", "DihedralDataDual",
+                                                     "ConstraintDataDual"]:
+                    terms = [index_list.__getattribute__(i) for i in index_list.keys() if not i.endswith('_B')]
+                    comment += 'Suppressed topology B data: {}' \
+                               ''.format('; '.join(['{}: {}'.format(i, index_list.__getattribute__(i))
+                                                   for i in index_list.keys() if i.endswith('_B')]))
                 else:
-                    inline_param_str = ('{:<{align_size}} ' * len(index_list)).format(*index_list,
-                                                                                      align_size=align_size)
+                    terms = [index_list.__getattribute__(i) for i in index_list.keys()]
+                if not comment and isinstance(index_list[-1], str):
+                    # Comment is stored in index_list
+                    comment = index_list[-1]
+                    inline_param_str = ('{:<{align_size}} ' * (len(terms) - 1)).format(*terms[:-1],
+                                                                                       align_size=align_size)
+                else:
+                    inline_param_str = ('{:<{align_size}} ' * len(terms)).format(*terms, align_size=align_size)
 
             if comment and comment.lstrip()[0] != ';':
                 inline_param_str += '; {}'.format(comment)
@@ -644,12 +698,20 @@ class TopologyData:
             return inline_param_str
 
     # Fields for unpacking atomtypes
-    __atomtype_data = namedlist('AtomTypeData', ['name', 'atom_type', 'm_u', 'q_e', 'particle_type', 'V', 'W',
-                                                 'comments'], defaults=[''])
+    __atomtype_dict = {0: namedlist('AtomTypeData', ['atom_type', 'm_u', 'q_e', 'particle_type', 'V', 'W', 'comments'],
+                                    defaults=['']),
+                       1: namedlist('AtomTypeData', ['atom_type', 'bonded_type', 'm_u', 'q_e', 'particle_type', 'V', 'W',
+                                                     'comments'], defaults=['']),
+                       2: namedlist('AtomTypeData', ['atom_type', 'atomic_number', 'm_u', 'q_e', 'particle_type', 'V', 'W',
+                                                     'comments'], defaults=['']),
+                       3: namedlist('AtomTypeData', ['atom_type', 'bonded_type', 'atomic_number', 'm_u', 'q_e',
+                                                     'particle_type', 'V', 'W', 'comments'], defaults=['']), }
 
     # Fields for unpacking atoms
-    __atom_data = namedlist('AtomData', ['atom_index', 'atom_type', 'residue_number', 'residue_name', 'atom_name',
-                                         'charge_group_number', 'q_e', 'm_u', 'comments'], defaults=[''])
+    __atomdata_fields = {1: ['atom_index', 'atom_type', 'residue_number', 'residue_name', 'atom_name',
+                             'charge_group_number', 'q_e', 'm_u', 'comments'],
+                         -1: ['atom_index', 'atom_type', 'residue_number', 'residue_name', 'atom_name',
+                              'charge_group_number', 'q_e', 'comments']}
 
     # Fields for unpacking bonds (assembles a dict of possible fields list)
     __bonddata_dict = {1: ['b0', 'kb', 'comments'],  # Bond
@@ -666,12 +728,24 @@ class TopologyData:
     __bonddata_fields = {function: ['atom_i', 'atom_j', 'function', *parameters]
                          for function, parameters in __bonddata_dict.items()}
 
+    # Fields for unpacking bonds for lines bearing both topology A and B data (assembles a dict of possible fields list)
+    __bonddata_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
+                                     + ['{}_B'.format(i) for i in this_terms[:-1]]
+                                     + [this_terms[-1]]
+                               for code, this_terms in __bonddata_dict.items()
+                               if code in [1, 2, 3, 6, 8, 9]}
+    __bonddata_fields_dualtop = {function: ['atom_i', 'atom_j', 'function', *parameters]
+                                 for function, parameters in __bonddata_dict_dualtop.items()}
+
     # Fields for unpacking pairs (assembles a dict of possible fields list)
     __pairsdata_dict = {1: ['V', 'W', 'comments'],  # extra LJ or Coulomb
                         2: ['fudge_QQ', 'qi', 'qj', 'V', 'W', 'comments'],  # extra LJ or Coulomb
                         -1: ['comments']}  # pair read from somewhere else
     __pairsdata_fields = {function: ['atom_i', 'atom_j', 'function', *parameters]
                           for function, parameters in __pairsdata_dict.items()}
+
+    # Fields for unpacking pairs for lines bearing both topology A and B data (only fn=1 pairs allowed)
+    __pairsdata_fields_dualtop = {1: ['atom_i', 'atom_j', 'function', 'V_A', 'W_A', 'V_B', 'W_B', 'comments']}
 
     __pairsnb_dict = {1: ['qi', 'qj', 'V', 'W', 'comments'],  # extra LJ or Coulomb
                       -1: ['comments']}  # nb pair read from somewhere else
@@ -692,6 +766,15 @@ class TopologyData:
     __angledata_fields = {function: ['atom_i', 'atom_j', 'atom_k', 'function', *parameters]
                           for function, parameters in __angledata_dict.items()}
 
+    # Fields for unpacking angle for lines bearing both topology A and B data (assembles a dict of possible fields list)
+    __angledata_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
+                                        + ['{}_B'.format(i) for i in this_terms[:-1]]
+                                        + [this_terms[-1]]
+                                  for code, this_terms in __angledata_dict.items()
+                                  if code in [1, 2, 5, 8]}
+    __angledata_fields_dualtop = {function: ['atom_i', 'atom_j', 'atom_k', 'function', *parameters]
+                                  for function, parameters in __angledata_dict_dualtop.items()}
+
     # Fields for unpacking dihedrals (assembles a dict of possible fields list)
     __dihedata_dict = {1: ['phi', 'k', 'multiplicity', 'comments'],  # proper dihedral
                        2: ['zeta0', 'k', 'comments'],  # improper dihedral
@@ -706,12 +789,34 @@ class TopologyData:
     __dihedata_fields = {function: ['atom_i', 'atom_j', 'atom_k', 'atom_l', 'function', *parameters]
                          for function, parameters in __dihedata_dict.items()}
 
-    # Fields for unpacking dihedrals (assembles a dict of possible fields list)
+    # Fields for unpacking dihedral for lines bearing both topology A and B data (assembles a dict of possible fields
+    # list)
+    __dihedata_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
+                                      + ['{}_B'.format(i) for i in this_terms[:-1]]
+                                      + [this_terms[-1]]
+                                for code, this_terms in __dihedata_dict.items()
+                                if code in [1, 2, 3, 4, 5, 8, 9]}
+    __dihedata_fields_dualtop = {function: ['atom_i', 'atom_j', 'atom_k', 'atom_l', 'function', *parameters]
+                                 for function, parameters in __dihedata_dict_dualtop.items()}
+
+    # Fields for unpacking constraints (assembles a dict of possible fields list)
     __constraint_dict = {1: ['b0', 'comments'],  # proper dihedral
                          2: ['b0', 'comments'],  # improper dihedral
                          -1: ['comments']}  # dihedral read from somewhere else
     __constraint_fields = {function: ['atom_i', 'atom_j', 'function', *parameters]
                            for function, parameters in __constraint_dict.items()}
+
+    # Fields for unpacking constraints for lines bearing both topology A and B data (assembles a dict of possible
+    # fields list)
+    __constraint_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
+                                       + ['{}_B'.format(i) for i in this_terms[:-1]]
+                                       + [this_terms[-1]]
+                                 for code, this_terms in __constraint_dict.items() if code in [1, 2]}
+    __constraint_fields_dualtop = {function: ['atom_i', 'atom_j', 'function', *parameters]
+                                   for function, parameters in __constraint_dict_dualtop.items()}
+
+    # Fields for unpacking SETTLE directives. No FE is allowed and only fn = 1 is supported with a single atom
+    __setttles_data = namedlist('SettlesData', ['atom_ow', 'function', 'doh', 'dhh', 'comments'], defaults=[''])
 
     # Fields for unpacking 2-atom virtual site
     __vsite2_data = namedlist('VirtualSite2Data', ['site', 'atom_i', 'atom_j', 'function', 'a', 'comments'],
@@ -786,7 +891,7 @@ class TopologyData:
         return_list = []
         value = value.split(';', 1)
         for each_part in value[0].split():
-            return_list.append(os_util.detect_type(each_part))
+            return_list.append(os_util.detect_type(each_part, test_for_boolean=False))
         try:
             return_list.append(value[1])
         except IndexError:
@@ -920,12 +1025,102 @@ class TopologyData:
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise KeyError("Multiple water names found.")
 
+    @staticmethod
+    def count_exact_atom_matches(atom_types_a, atom_types_b):
+        """Count the number of exact matches between the two groups of atom types
+
+        Parameters
+        ----------
+        atom_types_a : tuple
+            Atom types
+        atom_types_b : tuple
+            Atom types
+        Returns
+        -------
+        int
+            Number of exact matches, -1 if no matches are found
+        """
+
+        if atom_types_a[-1] != atom_types_b[-1]:
+            # Dihedral types don't match, break
+            return -1
+
+        if 'X' not in atom_types_b:
+            if atom_types_a == atom_types_b:
+                # If there are no wildcards in B, the only possible match is all atoms matching
+                return 4
+            else:
+                return -1
+
+        n_matches = 0
+        for i, j in zip(atom_types_a[:-1], atom_types_b[:-1]):
+            if i == j:
+                # Exact match
+                n_matches += 1
+            elif j == 'X':
+                # Wildcard, accept, but do not count as exact
+                pass
+            else:
+                # Atom types do no match
+                break
+        else:
+            return n_matches
+
+        # for was not broken, therefore a non-match was found
+        return -1
+
+    def find_online_param_wildcard(self, each_element, online_dict):
+        """ Finds online parameters for dihedrals using wildcards and returns them as a list. GROMACS wildcard logic is
+        described in the manual as "For [ dihedraltypes ] wildcard atom type names can be specified with the letter X
+        in one or more of the four positions. Thus one can for example assign proper dihedral parameters based on the
+        types of the middle two atoms. The parameters for the entry with the most exact matches, i.e. the least
+        wildcard matches, will be used.".
+
+        Parameters
+        ----------
+        each_element : list
+            list of parameter data (actually, a class generated from namedlist is expected)
+        online_dict : dict
+            topology atom data
+
+        Returns
+        -------
+            list
+        """
+
+        n_matches = [self.count_exact_atom_matches(each_element, each_dihedral) for each_dihedral in online_dict]
+
+        for i in range(3, 0, -1):
+            try:
+                # This will get the first line with n_matches matches
+                key = n_matches.index(i)
+            except ValueError:
+                pass
+            else:
+                break
+        else:
+            # No matching dihedral line was found
+            return False
+
+        # TODO: this is O(n), which isn't great. In general, the online dict shouldn't be modified after read, so maybe
+        #       it could be possible to cache list(online_dict). Or maybe don't use OrderedDicts at all. Or something
+        #       that inherits from OrderedDict, caches itself as a list and update the cache if needed. For molecules
+        #       using many dihedrals defined using wildcards, this *may* become a problem.
+        return list(online_dict.values())[key]
+
     def find_online_parameter(self, each_element, atoms_dict):
         """ Finds online parameters and returns them as a list
 
-        :param list each_element: list of parameter data (actually, a class generated from namedlist is expected)
-        :param dict atoms_dict:
-        :rtype: list
+        Parameters
+        ----------
+        each_element : list
+            list of parameter data (actually, a class generated from namedlist is expected)
+        atoms_dict : dict
+            topology atom data
+
+        Returns
+        -------
+            list
         """
 
         this_term_name = each_element.__class__.__name__
@@ -937,45 +1132,81 @@ class TopologyData:
                 len(each_element) == self.online_terms_dict[this_term_name]['function_index'] + 2:
             function_index = self.online_terms_dict[this_term_name]['function_index']
             online_dict = self.online_terms_dict[this_term_name]['online_dict']
+
+            # Build the index using atom data
             this_index = [atoms_dict[i].atom_type for i in each_element[:function_index]]
             this_index.append(each_element[function_index])
             this_index = tuple(this_index)
 
             try:
                 this_param_data = online_dict[this_index]
-            except KeyError as error:
+            except KeyError as error1:
                 if this_term_name == 'PairData':
+                    # It's a pair, no term is ok
                     return_data.append(each_element)
                 else:
-                    os_util.local_print('Could not find an online parameter for "{}" while parsing line {}. Please, '
-                                        'make sure your topology includes all the required parameters. The likely '
-                                        'cause for this is that your ligand topology uses parameters from the force '
-                                        'field which are not included in the ligand topology. This is, in principle, '
-                                        'not supported. Specifically, if you used CGenFF, make sure to select '
-                                        '"Include parameters that are already in CGenFF". Please, see the manual for '
-                                        'further info regarding this topic and your alternatives.'
-                                        ''.format(' '.join(map(str, this_index)), each_element),
-                                        msg_verbosity=os_util.verbosity_level.error)
-                    raise KeyError(error)
-            else:
-                if this_term_name == 'DihedralData' and each_element[function_index] == 9:
-                    # Assemble a new term list with online parameters
-                    for each_line in this_param_data:
-                        new_list = [*each_element[:function_index + 1], *each_line[function_index + 1:-1],
-                                    '{} - {}'.format(each_element[-1], each_line[-1])]
-                        each_element = namedlist(this_term_name,
-                                                 self.online_terms_dict[this_term_name]['data_fields'][
-                                                     each_element.function],
-                                                 defaults=[''])(*new_list)
-                        return_data.append(each_element)
-                else:
-                    new_list = [*each_element[:function_index + 1], *this_param_data[function_index + 1:-1],
-                                '{} - {}'.format(each_element[-1], this_param_data[-1])]
+                    # Try to match a bonded data using atomtype data
+                    this_index_2 = [self.atomtype_dict[atoms_dict[i].atom_type].bonded_type
+                                    for i in each_element[:function_index]]
+                    this_index_2.append(each_element[function_index])
+                    this_index_2 = tuple(this_index_2)
+                    try:
+                        this_param_data = online_dict[this_index_2]
+                    except KeyError as error2:
+                        # In case it's a dihedral, fall back to matching wildcards ("X" in GROMACS). Does GROMACS match
+                        # only atom types to wildcards? Or does it match using atom names? I implemented only the
+                        # former, as I didn't figure out from toppush.cpp the code.
+                        if this_term_name == 'DihedralData':
+                            this_param_data = self.find_online_param_wildcard(this_index_2, online_dict)
+                            if not this_param_data:
+                                os_util.local_print('Could not find an online parameter for dihedral "{}" while '
+                                                    'parsing line {}. Please, make sure your topology includes all '
+                                                    'the required parameters. The likely cause for this is that your '
+                                                    'ligand topology uses parameters from the force field which are '
+                                                    'not included in the ligand topology. This is, in principle, not '
+                                                    'supported. Specifically, if you used CGenFF, make sure to '
+                                                    'select "Include parameters that are already in CGenFF". Please, '
+                                                    'see the manual for further info regarding this topic and your '
+                                                    'alternatives.'
+                                                    ''.format(' '.join(map(str, this_index)), each_element),
+                                                    msg_verbosity=os_util.verbosity_level.error)
+                                raise error2
+                            else:
+                                os_util.local_print('Using dihedral data {} for dihedral {}, after matching exactly {} '
+                                                    'atoms.'
+                                                    ''.format(' '.join(map(str, this_index)), each_element,
+                                                              this_param_data),
+                                                    msg_verbosity=os_util.verbosity_level.info)
+                        else:
+                            os_util.local_print('Could not find an online parameter for "{}" while parsing line {}. '
+                                                'Please, make sure your topology includes all the required '
+                                                'parameters. The likely cause for this is that your ligand topology '
+                                                'uses parameters from the force field which are not included in the '
+                                                'ligand topology. This is, in principle, not supported. '
+                                                'Specifically, if you used CGenFF, make sure to select "Include '
+                                                'parameters that are already in CGenFF". Please, see the manual for '
+                                                'further info regarding this topic and your alternatives.'
+                                                ''.format(' '.join(map(str, this_index)), each_element),
+                                                msg_verbosity=os_util.verbosity_level.error)
+                            raise KeyError(error2)
+
+            if this_term_name == 'DihedralData' and each_element[function_index] == 9:
+                # Assemble a new term list with online parameters
+                for each_line in this_param_data:
+                    new_list = [*each_element[:function_index + 1], *each_line[function_index + 1:-1],
+                                '{} - {}'.format(each_element[-1], each_line[-1])]
                     each_element = namedlist(this_term_name,
                                              self.online_terms_dict[this_term_name]['data_fields'][
                                                  each_element.function],
                                              defaults=[''])(*new_list)
                     return_data.append(each_element)
+            elif this_term_name != 'PairData':
+                new_list = [*each_element[:function_index + 1], *this_param_data[function_index + 1:-1],
+                            '{} - {}'.format(each_element[-1], this_param_data[-1])]
+                each_element = namedlist(this_term_name,
+                                         self.online_terms_dict[this_term_name]['data_fields'][each_element.function],
+                                         defaults=[''])(*new_list)
+                return_data.append(each_element)
 
         else:
             # Not online or not allowed to be online
@@ -983,23 +1214,46 @@ class TopologyData:
 
         return return_data
 
-    def add_atom(self, atom_string, molecule_type):
-        """ Reads a atom line
+    def add_atom(self, atom_string, molecule_type, verbosity):
+        """Parse an atom line and adds it to a MoleculeTypeData object
 
-        :param str atom_string: atom line
-        :param MoleculeTypeData molecule_type: MoleculeTypeData object to associate atom to
+        Parameters
+        ----------
+        atom_string : str
+            Atom line to be processed, read from a GROMACS-compatible topology file
+        molecule_type : MoleculeTypeData
+            MoleculeTypeData object to associate atom data to
+        verbosity : int
+            Sets the verbosity level
         """
+
+        this_atom_data = self.type_converter(atom_string)
         try:
-            this_atom = self.__atom_data(*self.type_converter(atom_string))
-        except TypeError as error:
-            os_util.local_print('Error while parsing atom data:\n{}'.format(self.type_converter(atom_string)),
-                                msg_verbosity=os_util.verbosity_level.error)
-            raise KeyError(error)
+            # Try to interpret atom as if the mass is explicit
+            this_atom = namedlist('AtomData', self.__atomdata_fields[1], defaults=[''])(*this_atom_data)
+        except TypeError:
+            # Try to interpret atom as if the mass is online
+            try:
+                this_atom = namedlist('AtomData', self.__atomdata_fields[-1], defaults=[''])(*this_atom_data)
+            except TypeError as error:
+                os_util.local_print('Error while parsing atom data:\n{}'.format(self.type_converter(atom_string)),
+                                    msg_verbosity=os_util.verbosity_level.error)
+                raise TypeError(error)
+
         try:
-            molecule_type.atoms_dict[int(this_atom.atom_index)] = this_atom
+            atom_idx = int(this_atom.atom_index)
+            if atom_idx not in molecule_type.atoms_dict:
+                molecule_type.atoms_dict[atom_idx] = this_atom
+            else:
+                os_util.local_print('Atom {} redeclared in line "{}" for moleculetype {}.'
+                                    ''.format(molecule_type.atoms_dict[atom_idx], atom_string, molecule_type),
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                while atom_idx in molecule_type.atoms_dict:
+                    atom_idx = '{}\''.format(atom_idx)
+                molecule_type.atoms_dict[atom_idx] = this_atom
         except TypeError as error:
-            os_util.local_print('Error while parsing atom line {} in molecule {} with error {}'
-                                ''.format(atom_string, molecule_type, error),
+            os_util.local_print('Error while parsing atom line "{}" in molecule {} with error {}'
+                                ''.format(atom_string, molecule_type.name, error),
                                 msg_verbosity=os_util.verbosity_level.error)
 
             raise TypeError('Could not convert atom index value {} to integer'.format(this_atom.atom_index))
@@ -1017,18 +1271,36 @@ class TopologyData:
         try:
             # Try to interpret bond as if no parameters are explicit
             this_bond = namedlist('BondData', self.__bonddata_fields[-1], defaults=[''])(*this_bond_data)
-        except TypeError:
-            # It failed, try to read the parameters
+        except (TypeError, KeyError):
+            # It failed, try to read the parameters as if it bears a A and B topology data
             try:
-                this_bond = namedlist('BondData', self.__bonddata_fields[int(this_bond_data[2])],
+                this_bond = namedlist('BondDataDual', self.__bonddata_fields_dualtop[int(this_bond_data[2])],
                                       defaults=[''])(*this_bond_data)
-            except (TypeError, TypeError) as error:
-                # It failed, the function does not match the number of parameters
-                os_util.local_print('Error while parsing bond line {} in molecule {} with error {}'
-                                    ''.format(bond_string, molecule_type, error),
-                                    msg_verbosity=os_util.verbosity_level.error)
-                raise TypeError('Could not understand bond line {}'.format(bond_string))
+            except (TypeError, KeyError):
+                # It failed, try to read the parameters as if it's bears only topology A parameters
+                try:
+                    this_bond = namedlist('BondData', self.__bonddata_fields[int(this_bond_data[2])],
+                                          defaults=[''])(*this_bond_data)
+                except (TypeError, KeyError) as error:
+                    # It failed, the function does not match the number of parameters
+                    os_util.local_print('Error while parsing bond line "{}" in molecule {} with error {}'
+                                        ''.format(bond_string, molecule_type.name, error),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not understand bond line {}'.format(bond_string))
+                else:
+
+                    molecule_type.bonds_dict.append(this_bond)
+                    molecule_type.output_sequence.append(molecule_type.bonds_dict[-1])
             else:
+                # Test that parameters A and B are the same
+                if not molecule_type.bonds_dict.check_a_b_topology(this_bond):
+                    os_util.local_print('Error while parsing bond line "{}" in molecule {}. A and B topology terms do '
+                                        'not match. Using GROMACS topology interpolation is not supported. Please, see '
+                                        'the manual.'
+                                        ''.format(bond_string, molecule_type.name),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not parse bond line {}'.format(bond_string))
+
                 molecule_type.bonds_dict.append(this_bond)
                 molecule_type.output_sequence.append(molecule_type.bonds_dict[-1])
         else:
@@ -1108,17 +1380,36 @@ class TopologyData:
         try:
             # Try to interpret angle as if no parameters are explicit
             this_angle = namedlist('AngleData', self.__angledata_fields[-1], defaults=[''])(*this_angle_data)
-        except TypeError:
-            # It failed, try to read the parameters
+        except (TypeError, KeyError):
+            # It failed, try to read the parameters as if it bears a A and B topology data
             try:
-                this_angle = namedlist('AngleData', self.__angledata_fields[int(this_angle_data[3])],
+                this_angle = namedlist('AngleDataDual', self.__angledata_fields_dualtop[int(this_angle_data[3])],
                                        defaults=[''])(*this_angle_data)
-            except (TypeError, KeyError) as error:
-                os_util.local_print('Error while parsing angle line {} in molecule {} with error {}'
-                                    ''.format(angle_string, molecule_type, error),
-                                    msg_verbosity=os_util.verbosity_level.error)
-                raise TypeError('Could not understand angle line {}'.format(angle_string))
+            except (TypeError, KeyError):
+                # It failed, try to read the parameters as if it's bears only topology A parameters
+                try:
+                    this_angle = namedlist('AngleData', self.__angledata_fields[int(this_angle_data[3])],
+                                           defaults=[''])(*this_angle_data)
+                except (TypeError, KeyError) as error:
+                    # It failed, the function does not match the number of parameters
+                    os_util.local_print('Error while parsing angle line "{}" in molecule {} with error {}'
+                                        ''.format(angle_string, molecule_type.name, error),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not understand angle line {}'.format(angle_string))
+                else:
+                    molecule_type.angles_dict.append(this_angle)
+                    molecule_type.output_sequence.append(molecule_type.angles_dict[-1])
+
             else:
+                # Test that parameters A and B are the same
+                if not molecule_type.angles_dict.check_a_b_topology(this_angle):
+                    os_util.local_print('Error while parsing angle line "{}" in molecule {}. A and B topology terms do '
+                                        'not match. Using GROMACS topology interpolation is not supported. Please, see '
+                                        'the manual.'
+                                        ''.format(angle_string, molecule_type.name),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not parse angle line {}'.format(angle_string))
+
                 molecule_type.angles_dict.append(this_angle)
                 molecule_type.output_sequence.append(molecule_type.angles_dict[-1])
         else:
@@ -1127,27 +1418,50 @@ class TopologyData:
             molecule_type.output_sequence.extend(new_term_list)
 
     def add_dihedral(self, dihedral_string, molecule_type):
-        """ Reads a dihedral angle line
+        """Reads a dihedral dihedral line
 
-        :param str dihedral_string: dihedral line
-        :param MoleculeTypeData molecule_type: MoleculeTypeData object to associate dihedral to
+        Parameters
+        ----------
+        dihedral_string : str
+            Dihedral line to be processed
+        molecule_type : MoleculeTypeData
+            MoleculeTypeData object to associate dihedral to
         """
 
         this_dihedral_data = self.type_converter(dihedral_string)
         try:
             # Try to interpret dihedral as if no parameters are explicit
             this_dihedral = namedlist('DihedralData', self.__dihedata_fields[-1], defaults=[''])(*this_dihedral_data)
-        except TypeError:
-            # It failed, try to read the parameters
+        except (TypeError, KeyError):
+            # It failed, try to read the parameters as if it bears a A and B topology data
             try:
-                this_dihedral = namedlist('DihedralData', self.__dihedata_fields[int(this_dihedral_data[4])],
+                this_dihedral = namedlist('DihedralDataDual',
+                                          self.__dihedata_fields_dualtop[int(this_dihedral_data[4])],
                                           defaults=[''])(*this_dihedral_data)
-            except (TypeError, KeyError) as error:
-                os_util.local_print('Error while parsing dihedral line {} in molecule {} with error {}'
-                                    ''.format(dihedral_string, molecule_type, error),
-                                    msg_verbosity=os_util.verbosity_level.error)
-                raise TypeError('Could not understand dihedral line {}'.format(dihedral_string))
+            except (TypeError, KeyError):
+                # It failed, try to read the parameters as if it's bears only topology A parameters
+                try:
+                    this_dihedral = namedlist('DihedralData', self.__dihedata_fields[int(this_dihedral_data[4])],
+                                           defaults=[''])(*this_dihedral_data)
+                except (TypeError, KeyError) as error:
+                    # It failed, the function does not match the number of parameters
+                    os_util.local_print('Error while parsing dihedral line "{}" in molecule {} with error {}'
+                                        ''.format(dihedral_string, molecule_type.name, error),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not understand dihedral line {}'.format(dihedral_string))
+                else:
+                    molecule_type.dihe_dict.append(this_dihedral)
+                    molecule_type.output_sequence.append(molecule_type.dihe_dict[-1])
+
             else:
+                # Test that parameters A and B are the same
+                if not molecule_type.dihe_dict.check_a_b_topology(this_dihedral):
+                    os_util.local_print('Error while parsing dihedral line "{}" in molecule {}. A and B topology terms '
+                                        'do not match. Using GROMACS topology interpolation is not supported. Please, '
+                                        'see the manual.'.format(dihedral_string, molecule_type.name),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not parse dihedral line {}'.format(dihedral_string))
+
                 molecule_type.dihe_dict.append(this_dihedral)
                 molecule_type.output_sequence.append(molecule_type.dihe_dict[-1])
         else:
@@ -1167,17 +1481,37 @@ class TopologyData:
             # Try to interpret constraint as if no parameters are explicit
             this_constraint = namedlist('ConstraintData',
                                         self.__constraint_fields[-1], defaults=[''])(*this_constraint_data)
-        except TypeError:
-            # It failed, try to read the parameters
+        except (TypeError, KeyError):
+            # It failed, try to read the parameters as if it bears a A and B topology data
             try:
-                this_constraint = namedlist('ConstraintData', self.__constraint_fields[int(this_constraint_data[2])],
+                this_constraint = namedlist('ConstraintDataDual',
+                                            self.__constraint_fields_dualtop[int(this_constraint_data[3])],
                                             defaults=[''])(*this_constraint_data)
-            except (TypeError, KeyError) as error:
-                os_util.local_print('Error while parsing constraint line {} in molecule {} with error {}'
-                                    ''.format(this_constraint_data, molecule_type, error),
-                                    msg_verbosity=os_util.verbosity_level.error)
-                raise TypeError('Could not understand constraint line {}'.format(constraint_string))
+            except (TypeError, KeyError):
+                # It failed, try to read the parameters as if it's bears only topology A parameters
+                try:
+                    this_constraint = namedlist('ConstraintData',
+                                                self.__constraint_fields[int(this_constraint_data[3])],
+                                                defaults=[''])(*this_constraint_data)
+                except (TypeError, KeyError) as error:
+                    # It failed, the function does not match the number of parameters
+                    os_util.local_print('Error while parsing constraint line "{}" in molecule {} with error {}'
+                                        ''.format(constraint_string, molecule_type.name, error),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not understand constraint line "{}"'.format(constraint_string))
+                else:
+                    molecule_type.constraints_dict.append(this_constraint)
+                    molecule_type.output_sequence.append(molecule_type.constraints_dict[-1])
+
             else:
+                # Test that parameters A and B are the same
+                if not molecule_type.constraints_dict.check_a_b_topology(this_constraint):
+                    os_util.local_print('Error while parsing constraint line "{}" in molecule {}. A and B topology '
+                                        'terms do not match. Using GROMACS topology interpolation is not supported. '
+                                        'Please, see the manual.'.format(constraint_string, molecule_type.name),
+                                        msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError('Could not parse constraint line "{}"'.format(constraint_string))
+
                 molecule_type.constraints_dict.append(this_constraint)
                 molecule_type.output_sequence.append(molecule_type.constraints_dict[-1])
         else:
@@ -1202,18 +1536,47 @@ class TopologyData:
         molecule_type.output_sequence.append(molecule_type.exclusions_dict[-1])
 
     def add_atomtype(self, atomtype_string, verbosity):
-        """ Reads a constraint line
+        """ Reads a atomtype line. GROMACS manual states that bonded type and atomic number are optional, but it
+        doesn't explain how this is done. There is a description at src/gromacs/gmxpreprocess/toppush.cpp:push_at. From
+        toppush.cpp (lines 339-367):
+
+            * A. Read in the first six fields as strings
+            * B. If field 3 (starting from 0) is a single char, we have neither
+            *    bonded_type or atomic numbers.
+            * C. If field 5 is a single char we have both.
+            * D. If field 4 is a single char we check field 1. If this begins with
+            *    an alphabetical character we have bonded types, otherwise atomic numbers.
 
         :param str atomtype_string: atomtype line
         :param int verbosity: verbosity level
         """
 
-        this_atomtype = self.__atomtype_data(*self.type_converter(atomtype_string))
-        if (this_atomtype.name in self.atomtype_dict) and (verbosity > -1):
-            os_util.local_print('Atomtype {} redeclared! Only last entry will be kept.'.format(this_atomtype.name),
+        this_atomtype_data = self.type_converter(atomtype_string)
+        if isinstance(this_atomtype_data[3], str) and len(this_atomtype_data[3]) == 1:
+            # Field 3 is a single char, neither bonded_type nor atomic numbers were read.
+            this_atomtype = self.__atomtype_dict[0](*this_atomtype_data)
+        elif isinstance(this_atomtype_data[5], str) and len(this_atomtype_data[5]) == 1:
+            # Field 5 is a single char, read both bonded_type and atomic_number are present
+            this_atomtype = self.__atomtype_dict[3](*this_atomtype_data)
+        elif isinstance(this_atomtype_data[4], str) and len(this_atomtype_data[4]) == 1:
+            # Field 4 is a single char, checking field 1
+            if isinstance(this_atomtype_data[1], str):
+                # It begins with an alphabetical character (in Python, this is a string), therefore we have bonded_type
+                this_atomtype = self.__atomtype_dict[1](*this_atomtype_data)
+            else:
+                # We have atomic_number
+                this_atomtype = self.__atomtype_dict[2](*this_atomtype_data)
+        else:
+            os_util.local_print('Failed to process atomtype data in line {}. There were the fields read: {}'
+                                ''.format(atomtype_string, this_atomtype_data),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise ValueError
+
+        if (this_atomtype.atom_type in self.atomtype_dict) and (verbosity > -1):
+            os_util.local_print('Atomtype {} redeclared! Only last entry will be kept.'.format(this_atomtype.atom_type),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
         self.output_sequence.append(this_atomtype)
-        self.atomtype_dict[this_atomtype.name] = self.output_sequence[-1]
+        self.atomtype_dict[this_atomtype.atom_type] = self.output_sequence[-1]
 
     def add_bondedtype(self, bondedtype_string, type_directive):
         """ Reads a bondtype line
@@ -1230,7 +1593,24 @@ class TopologyData:
 
         this_functionindex = self.type_directive_dict[type_directive]['function_index']
         this_functioncode = this_bonded_data[this_functionindex]
-        if type_directive != 'constrainttype':
+        if type_directive == 'dihedraltypes':
+            # dihedraltypes directive accepts either 2 or 4 atoms. From gromacs/gmxpreprocess/toppush.cpp, it is done
+            # like that (gromacs/gmxpreprocess/toppush.cpp:919):
+            #      * We first check for 2 atoms with the 3th column being an integer
+            #      * defining the type. If this isn't the case, we try it with 4 atoms
+            #      * and the 5th column defining the dihedral type.
+            if isinstance(this_bonded_data[2], int):
+                this_functioncode = this_bonded_data[2]
+                # It is a 2-atoms dihedraltype. Move atoms and use 'X' as wildcards (also following GROMACS)
+                if this_bonded_data[2] == 2:
+                    this_bonded_data.insert(1, 'X')
+                    this_bonded_data.insert(1, 'X')
+                else:
+                    this_bonded_data.insert(0, 'X')
+                    this_bonded_data.insert(2, 'X')
+            this_linetype = self.type_directive_dict[type_directive]['data_fields'][this_functioncode]
+
+        elif type_directive != 'constrainttype':
             this_linetype = self.type_directive_dict[type_directive]['data_fields'][this_functioncode]
         else:
             this_linetype = self.type_directive_dict[type_directive]['data_fields']
@@ -1259,6 +1639,26 @@ class TopologyData:
                 this_online_dict[index_tuple_rev] = this_bonded_type
 
         self.output_sequence.append('; {}\n'.format(bondedtype_string))
+
+    def add_settle(self, settle_string, molecule_type):
+        """ Reads a settles line
+
+        :param str settle_string: virtual site line
+        :param MoleculeTypeData molecule_type: MoleculeTypeData object to associate vsite to
+        """
+
+        this_settle_data = self.type_converter(settle_string)
+        try:
+            this_settle = self.__setttles_data(*this_settle_data)
+        except ValueError as error:
+            os_util.local_print('Error while parsing settles line {} in molecule {} with error {}'
+                                ''.format(settle_string, molecule_type, error),
+                                msg_verbosity=os_util.verbosity_level.error)
+            raise TypeError('Could not understand settles line {}.'
+                            ''.format(settle_string))
+        else:
+            molecule_type.settles_dict.append(this_settle)
+            molecule_type.output_sequence.append(molecule_type.settles_dict[-1])
 
     def add_vsite2(self, vsite2_string, molecule_type):
         """ Reads a constraint line
@@ -1390,7 +1790,7 @@ class TopologyData:
                     actual_moleculetype = self.output_sequence[-1]
                     self.molecules.append(self.output_sequence[-1])
                     actual_moleculetype.output_sequence.append(raw_line)
-                    file_marker = None
+                    file_marker = 'moleculetype'
                 elif cur_directive in ['system', 'molecules', 'defaults']:
                     # system also ends moleculetypes
                     os_util.local_print("Suppressing [ {} ] directive of file {}".format(this_directive.group(1),
@@ -1428,7 +1828,7 @@ class TopologyData:
             else:
                 try:
                     if file_marker == molecule_directives['atoms']:
-                        self.add_atom(each_line, actual_moleculetype)
+                        self.add_atom(each_line, actual_moleculetype, verbosity=verbosity)
                     elif file_marker == molecule_directives['bonds']:
                         self.add_bond(each_line, actual_moleculetype)
                     elif file_marker == molecule_directives['pairs']:
@@ -1449,10 +1849,12 @@ class TopologyData:
                         self.add_vsite3(each_line, actual_moleculetype)
                     elif file_marker == molecule_directives['virtual_sites4']:
                         self.add_vsite4(each_line, actual_moleculetype)
+                    elif file_marker == molecule_directives['settles']:
+                        self.add_settle(each_line, actual_moleculetype)
                     elif file_marker == 'atomtypes':
                         self.add_atomtype(each_line, verbosity)
                     elif file_marker in type_directives.values():
-                        # FIXME: avoid this (maybe by not using codes and rather the actual strings?
+                        # TODO: avoid this (maybe by not using codes and rather the actual strings?
                         type_str = list(type_directives.keys())[list(type_directives.values()).index(file_marker)]
                         self.add_bondedtype(each_line, type_directive=type_str)
                     elif file_marker == supress_code:
@@ -1462,22 +1864,49 @@ class TopologyData:
                         except (UnboundLocalError, AttributeError):
                             # We are not
                             self.output_sequence.append('; {}'.format(raw_line))
-                    else:
+                    elif file_marker == 'moleculetype':
+                        this_line = each_line.split(';')[0].split()
+                        if len(this_line) != 2:
+                            error = 'Cannot parse moleculetype data'
+                            os_util.local_print('Failed to parse line #{}. This is the line read:\n{}\nError was: {}'
+                                                ''.format(each_index, raw_line, error),
+                                                msg_verbosity=os_util.verbosity_level.error)
+                            raise ValueError(error)
                         try:
-                            # Are we in a moleculetype? If does, tries to read name
-                            if not actual_moleculetype.name:
-                                actual_moleculetype.name = each_line.split()[0]
-                        except (UnboundLocalError, AttributeError):
-                            # We are in a non-parsed directive OUTSIDE a moleculetype, just go on
-                            self.output_sequence.append(raw_line)
-                        else:
-                            # Molecule name read
+                            assert int(this_line[1]) in [3, 4]
+                        except ValueError:
+                            error = 'Cannot parse moleculetype data'
+                            os_util.local_print('Failed to parse line #{}. This is the line read:\n{}\nError was: {}'
+                                                ''.format(each_index, raw_line, error),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise ValueError(error)
+                        except AssertionError:
+                            os_util.local_print('Non-bonded interactions exclusion read to be nrexcl = {}. Make sure '
+                                                'that this is what you want.'.format(this_line[1]),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+
+                        if not actual_moleculetype.name:
+                            # Molecule name was not set, set it from this line
+                            actual_moleculetype.name = this_line[0]
+                            actual_moleculetype.name_line._nrexcl = int(this_line[1])
                             actual_moleculetype.output_sequence.append(actual_moleculetype.name_line)
+                        else:
+                            # Either the name is being redeclared or molecule name was set before reading the topology,
+                            # which doesn't make sense.
+                            os_util.local_print('Molecule name for molecule {} was already set but it was read again '
+                                                'in line {}: "{}". This should not happen. Please, check your inputs.'
+                                                ''.format(actual_moleculetype.name, each_index, raw_line),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise ValueError('Molecule name redeclared/set again')
 
                 except KeyError as error:
                     os_util.local_print('Failed to parse line #{}. This is the line read:\n{}\nError was: {}'
-                                        ''.format(each_index, raw_line, error))
-                    raise SystemExit(1)
+                                        ''.format(each_index, raw_line, error),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise KeyError(error)
 
     def __str__(self, style='full'):
         """ Returns formatted topology
@@ -1490,7 +1919,7 @@ class TopologyData:
         if style == 'full':
             return_str = []
             for each_element in self.output_sequence:
-                if isinstance(each_element, self.__atomtype_data):
+                if isinstance(each_element, tuple(self.__atomtype_dict.values())):
                     return_str.append(('{:<15} ' * len(each_element)).format(*[a for a in each_element]) + '\n')
                 else:
                     return_str.append(each_element.__str__())
@@ -1509,7 +1938,7 @@ class TopologyData:
         elif style == 'itp':
             return_str = []
             for each_element in self.output_sequence:
-                if isinstance(each_element, self.__atomtype_data) or \
+                if isinstance(each_element, tuple(self.__atomtype_dict.values())) or \
                         re.match('(?:\[\s+)(atomtypes)(?:\s+\])', str(each_element), flags=re.IGNORECASE) is not None:
                     continue
                 else:
@@ -1552,6 +1981,7 @@ class DualTopologyData(TopologyData):
             raise ValueError("charge_interpolation must be one of 'linear', 'sigmoid'")
 
         self.atoms_const = []
+        self.atoms_const_vdw = []
         self.atoms_A = []
         self.atoms_B = []
         self.dualatomtype_data_dict = OrderedDict()
@@ -1559,8 +1989,8 @@ class DualTopologyData(TopologyData):
         self._current_lambda_value = None
         super().__init__(topology_file)
 
-    def add_dual_atom_add_atomtype(self, new_name, input_atom, input_atomtype, mol_region, q_a=0.0, q_b=0.0, vdw_v_a=0.0,
-                                   vdw_w_a=0.0, vdw_v_b=0.0, vdw_w_b=0.0, verbosity=0):
+    def add_dual_atom_add_atomtype(self, new_name, input_atom, input_atomtype, mol_region, q_a=0.0, q_b=0.0,
+                                   vdw_v_a=0.0, vdw_w_a=0.0, vdw_v_b=0.0, vdw_w_b=0.0, verbosity=0):
         """ Adds a dual atom, sets atom data and adds an correspondingly atomtype. Tries to be smart about charge and
         VdW parameters.
 
@@ -1598,11 +2028,19 @@ class DualTopologyData(TopologyData):
         new_atomtype = deepcopy(input_atomtype)
         input_atom.atom_type = new_name
         new_atomtype.atom_type = new_name
-        new_atomtype.name = new_name
-        last_atomtype_index = self.output_sequence.index(next(reversed(self.atomtype_dict.values())))
+
+        try:
+            last_atomtype_index = self.output_sequence.index(next(reversed(self.atomtype_dict.values())))
+        except StopIteration:
+            # atomtype_dict is empty, so no atomtypes were read. Insert an atomtypes directive at the beginning of file
+            # and a correspondingly atom type
+            self.output_sequence.insert(0, new_atomtype)
+            self.output_sequence.insert(0, '[ atomtypes ]')
+        else:
+            self.output_sequence.insert(last_atomtype_index + 1, new_atomtype)
+
         self.atomtype_dict[new_name] = new_atomtype
-        self.output_sequence.insert(last_atomtype_index + 1, new_atomtype)
-        self.add_dual_atomtype(new_atomtype.name, vdw_v_a, vdw_w_a, vdw_v_b, vdw_w_b)
+        self.add_dual_atomtype(new_atomtype.atom_type, vdw_v_a, vdw_w_a, vdw_v_b, vdw_w_b)
 
     def add_dual_atom(self, name, mol_region, charge_a=None, charge_b=None):
         """ Stores charges in topologies A and B for atom name
@@ -1624,7 +2062,7 @@ class DualTopologyData(TopologyData):
                 self.dualatom_data_dict[name].charge_b = charge_b
 
         # Add atom to the correspondingly mol region
-        if mol_region not in ['A', 'B', 'const']:
+        if mol_region not in ['A', 'B', 'const', 'const_vdw']:
             raise ValueError('Molecular region {} not allowed, please select between "A", "B", "const"'
                              ''.format(mol_region))
         self.__getattribute__('atoms_{}'.format(mol_region)).append(name)
@@ -1696,10 +2134,15 @@ class DualTopologyData(TopologyData):
         else:
             raise ValueError("Unknown charge interpolation {}".format(self.charge_interpolation))
 
-    def set_lambda_state(self, lambda_value):
-        """ Sets lambda to lambda_value, affecting all dual atoms
+    def set_lambda_state(self, lambda_value, verbosity=0):
+        """Sets lambda to lambda_value, affecting all dual atoms
 
-        :param int lambda_value: use this lambda value
+        Parameters
+        ----------
+        lambda_value : int
+            Use this lambda value column from lambda_table
+        verbosity : int
+            Set the verbosity level
         """
         if self.lambda_table is None:
             raise ValueError("lambda_table was not set, set it before setting a lambda_state")
@@ -1713,34 +2156,63 @@ class DualTopologyData(TopologyData):
                                   + self.dualatomtype_data_dict[atom_name].V_b * self.lambda_table['vdwB'][lambda_value]
                     atom_data.W = self.dualatomtype_data_dict[atom_name].W_a * self.lambda_table['vdwA'][lambda_value] \
                                   + self.dualatomtype_data_dict[atom_name].W_b * self.lambda_table['vdwB'][lambda_value]
-                else:
-                    # Atom is in constant region and VdW in both endpoints are the same. Scale state A data using
+                elif atom_name in self.atoms_const:
+                    # Atom is in the constant region and VdW in both endpoints are the same. Scale state A data using
                     # vdw_const
                     atom_data.V = self.dualatomtype_data_dict[atom_name].V_a \
                                   * self.lambda_table['vdw_const'][lambda_value]
                     atom_data.W = self.dualatomtype_data_dict[atom_name].W_a \
                                   * self.lambda_table['vdw_const'][lambda_value]
+                elif atom_name in self.atoms_const_vdw:
+                    # Atom is in the constant region, but VdW perturbation is allowed. Interpolate states A and B using
+                    # get_charge_scaling
+                    if (self.dualatomtype_data_dict[atom_data.atom_type].V_b == 0.0
+                            or self.dualatomtype_data_dict[atom_data.atom_type].W_b):
+                        # Should this throw an error?
+                        os_util.local_print('Null Van der Waals parameters for atom {}, but atom is in const_vdw '
+                                            'region, where VdW sacling is allowed. This is possibly wrong. Make sure '
+                                            'your topology is correct.'.format(atom_name),
+                                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
+                    atom_data.V = self.dualatomtype_data_dict[atom_data.atom_type].V_a \
+                                  * self.get_charge_scaling(lambda_value) \
+                                  + self.dualatomtype_data_dict[atom_data.atom_type].V_b \
+                                  * (1.0 - self.get_charge_scaling(lambda_value))
+                    atom_data.W = self.dualatomtype_data_dict[atom_data.atom_type].W_a \
+                                  * self.get_charge_scaling(lambda_value) \
+                                  + self.dualatomtype_data_dict[atom_data.atom_type].W_b \
+                                  * (1.0 - self.get_charge_scaling(lambda_value))
+
+                    # Optionally scale the constant region VdW
+                    atom_data.V *= atom_data.V * self.lambda_table['vdw_const'][lambda_value]
+                    atom_data.W *= atom_data.W * self.lambda_table['vdw_const'][lambda_value]
+                else:
+                    os_util.local_print('Atom {} not found in internal indexes: atoms_A={}, atoms_B={}, '
+                                        'atoms_const={}. Cannot continue.'
+                                        ''.format(atom_name,self.atoms_A, self.atoms_B, self.atoms_const),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise KeyError('Atom {} not found'.format(atom_name))
 
         # Scales charges for dual atoms atomtypes
         for atom_idx, atom_data in self.molecules[0].atoms_dict.items():
-            if atom_data.atom_name in self.dualatom_data_dict:
+            if atom_data.atom_type in self.dualatom_data_dict:
                 # 1. Find out if the atom is in constant part or only in A or B.
                 # FIXME: if a constant atom with q_e = 0 in one of the topology A or B is present, this will
                 #  incorrectly scale it using the same rules as topology A or B
-                if atom_data.atom_name in self.atoms_B:
+                if atom_data.atom_type in self.atoms_B:
                     # Atom is present only in B
-                    atom_data.q_e = self.dualatom_data_dict[atom_data.atom_name].charge_b \
+                    atom_data.q_e = self.dualatom_data_dict[atom_data.atom_type].charge_b \
                                     * self.lambda_table['coulB'][lambda_value]
-                elif atom_data.atom_name in self.atoms_A:
+                elif atom_data.atom_type in self.atoms_A:
                     # Atom is present only in A
-                    atom_data.q_e = self.dualatom_data_dict[atom_data.atom_name].charge_a \
+                    atom_data.q_e = self.dualatom_data_dict[atom_data.atom_type].charge_a \
                                     * self.lambda_table['coulA'][lambda_value]
                 else:
                     # Atom in constant region, scale according to charge_interpolation
                     # charge = scaling_lambda * charge_a + (1.0 - scaling_lambda) * charge_b
-                    atom_data.q_e = self.dualatom_data_dict[atom_data.atom_name].charge_a \
+                    atom_data.q_e = self.dualatom_data_dict[atom_data.atom_type].charge_a \
                                     * self.get_charge_scaling(lambda_value) \
-                                    + self.dualatom_data_dict[atom_data.atom_name].charge_b \
+                                    + self.dualatom_data_dict[atom_data.atom_type].charge_b \
                                     * (1.0 - self.get_charge_scaling(lambda_value))
 
                     # Optionally scale the constant region as well
@@ -1748,7 +2220,7 @@ class DualTopologyData(TopologyData):
 
     def __str__(self, style='full'):
         if self._current_lambda_value is None:
-            self.set_lambda_state(lambda_value=0)
+            raise RuntimeError("Call to __str__ before calling set_lambda_state")
         return super().__str__(style=style)
 
 
@@ -1835,7 +2307,7 @@ class PDBFile:
                 else:
                     output_data.append(each_line)
 
-            return ''.join(output_data)
+            return output_data
 
     class PDBResidue(list):
         """ Index atoms belonging to the same residue """
@@ -1930,7 +2402,8 @@ class PDBFile:
         """
         if isinstance(input_file, str):
             self.file_lines = os_util.read_file_to_buffer(input_file, die_on_error=True, return_as_list=True,
-                                                          error_message='Failed to read PDB file {}.')
+                                                          error_message='Failed to read PDB file {}.'
+                                                                        ''.format(input_file))
         else:
             self.file_lines = input_file
 
@@ -1954,8 +2427,8 @@ class PDBFile:
                     new_res = False
                 else:
                     self.residues[-1].append(this_atom)
-                    if current_model is not None:
-                        current_model.append(this_atom)
+                if current_model is not None:
+                    current_model.append(this_atom)
                 self.file_lines[line_num] = this_atom
 
             elif len(each_line) >= 5 and each_line[0:5] == 'MODEL':
@@ -1997,7 +2470,46 @@ class PDBFile:
                 tmp_atom_list.append(each_line)
         self.atoms = tmp_atom_list
 
-    def to_file(self, output_file=None, output_connect=False):
+    def update_resseq(self, first_res=None):
+        """Updates the atoms' res_seq from self sequence
+
+        Parameters
+        ----------
+        first_res : int or None
+            Use this value as the first residue seq number. If None, the number of the first residue will be used. Pass
+            1 here to get a sequence starting from 1.
+        """
+        if first_res is None:
+            first_res = self.atoms[0].res_seq
+
+        current_res_seq = None
+        # n starts as X and will be updated to X+1 when current_res_seq is None, so n must be first_res - 1
+        n = first_res - 1
+        for each_atom in self.atoms:
+            # Which is the current res_seq being read? If we find a new res, update n
+            if current_res_seq is None or current_res_seq != each_atom.res_seq:
+                current_res_seq = each_atom.res_seq
+                n += 1
+            each_atom.res_seq = n
+
+    def to_file(self, output_file=None, output_connect=False, verbosity=0):
+        """Dumps PDB structure to a PDB file
+
+        Parameters
+        ----------
+        output_file : str or None
+            Output file, will be overwritten if exists. If None, will return the data as list.
+        output_connect : bool
+            Also write PDB CONECT records. Note: no new CONECTs will be generated, only ones present in the read file
+            would be written
+        verbosity : int
+            Sets verbosity level
+
+        Returns
+        -------
+        list
+            PDB-data, returned if output_file is None
+        """
         output_data = []
         for each_line in self.file_lines:
             if (not output_connect) and isinstance(each_line, str) and each_line.startswith('CONECT'):
@@ -2022,18 +2534,18 @@ class PDBFile:
 
 # mergedtopologies_class = namedlist('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
 #                                                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b',
-#                                                         'dual_molecule_name'])
+#                                                         'dual_molecule_name', 'delta_charge'])
 class MergedTopologies(Namespace):
     """Holds topology data for merged molecules and topologies
     """
 
     def __init__(self, dual_topology, dual_molecule, mcs, common_core_mol, molecule_a, topology_a, molecule_b,
-                 topology_b, dual_molecule_name):
+                 topology_b, dual_molecule_name, delta_charge=0):
         super().__init__()
         for k, v in zip(['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol', 'molecule_a', 'topology_a',
-                         'molecule_b', 'topology_b', 'dual_molecule_name'],
+                         'molecule_b', 'topology_b', 'dual_molecule_name', 'delta_charge'],
                         [dual_topology, dual_molecule, mcs, common_core_mol, molecule_a, topology_a, molecule_b,
-                         topology_b, dual_molecule_name]):
+                         topology_b, dual_molecule_name, delta_charge]):
             self[k] = v
 
     def to_pdb_block(self, molecule_name=None, confId=-1, verbosity=0):
@@ -2063,7 +2575,6 @@ class MergedTopologies(Namespace):
         molecule_b_pdb = [each_line
                           for each_line in MolToPDBBlock(self.molecule_b, confId=confId, flavor=flavor).split('\n')
                           if each_line.find('HETATM') == 0 or each_line.find('ATOM') == 0]
-
         # Suppress END record and empty line after molecule A
         # TODO edit COMPND record?
         return_list = molecule_a_pdb[:-2]
@@ -2075,7 +2586,6 @@ class MergedTopologies(Namespace):
                      for each_atom in self.molecule_b.GetAtoms()
                      if each_atom.GetIdx() not in
                      self.molecule_b.GetSubstructMatch(core_structure)]
-
         os_util.local_print('These are the atoms present only in topology B: {}'.format(only_in_b),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
@@ -2097,6 +2607,9 @@ class MergedTopologies(Namespace):
         return_list.extend(['TER', '\n'])
 
         return '\n'.join(return_list)
+
+    def __repr__(self):
+        return '< MergedTopologies object (name="{}") >'.format(self.dual_molecule_name)
 
 
 class MolecularTopologies(Namespace):
@@ -2143,3 +2656,11 @@ class MolecularTopologies(Namespace):
         return_list.extend(['TER', '\n'])
 
         return '\n'.join(return_list)
+
+    def __repr__(self):
+        return '< MergedTopologies object (name="{}") >'.format(self.dual_molecule_name)
+
+
+# Class to hold coion data, used for charge perturbations
+coion_class = namedlist('CoIonData', ['dual_topology', 'structure_data', 'delta_charge', 'ion_name', 'water_o_atom',
+                                      'coion_topology_files'])

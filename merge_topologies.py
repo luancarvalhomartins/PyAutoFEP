@@ -697,6 +697,9 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise ValueError('number of atoms mismatch')
 
+    # Calculates the charge difference
+    delta_charge = rdkit.Chem.GetFormalCharge(molecule1) - rdkit.Chem.GetFormalCharge(molecule2)
+
     moleculetype_a = topology1.molecules[0]
     moleculetype_b = topology2.molecules[0]
 
@@ -853,8 +856,9 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
         new_molecule.output_sequence.insert(last_atom + 1, new_atom)
         new_molecule.atoms_dict[new_index] = new_atom
 
+    # Suppress unused atomtypes
     for key, each_atomtype in dual_topology.atomtype_dict.items():
-        if each_atomtype.name not in [each_atom.atom_type for each_atom in new_molecule.atoms_dict.values()]:
+        if each_atomtype.atom_type not in [each_atom.atom_type for each_atom in new_molecule.atoms_dict.values()]:
             suppress_line = '; {} Suppressed\n'.format(new_molecule._format_inline(each_atomtype))
             dual_topology.output_sequence[dual_topology.output_sequence.index(each_atomtype)] = suppress_line
             dual_topology.atomtype_dict[key] = suppress_line
@@ -1030,10 +1034,13 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                 raise SystemExit(1)
 
     # mergedtopologies_class ('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
-    #                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b', 'dual_molecule_name'])
+    #                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b', 'dual_molecule_name',
+    #                         'delta_charge'])
     merged_data = all_classes.MergedTopologies(dual_topology, dual_molecule, common_core_smiles, core_structure,
                                                molecule1, topology1, molecule2_embed, topology2,
-                                               '{}_{}'.format(molecule1.GetProp("_Name"), molecule2.GetProp("_Name")))
+                                               '{}\u2192{}'.format(molecule1.GetProp("_Name"),
+                                                                   molecule2.GetProp("_Name")),
+                                               delta_charge)
     return merged_data
 
 
@@ -1640,13 +1647,23 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
 
 def get_substruct_matches_fallback(reference_mol, core_mol, die_on_error=True, verbosity=0, **kwargs):
     """ Use rdkit GetStructMatched to get matches between reference_mol and core_mol, falling back to progressively
-    more loose criteria to match the structures. kwargs will be passed to GetStructMatched
+    more loose criteria to match the structures. kwargs will be passed to GetStructMatched.
 
-    :param rdkit.Chem.Mol reference_mol: reference molecule
-    :param rdkit.Chem.Mol core_mol: query molecule
-    :param bool die_on_error: if no match is found, raise
-    :param int verbosity: set verbosity level
-    :return:
+    Parameters
+    ----------
+    reference_mol : rdkit.Chem.Mol
+        Reference molecule
+    core_mol : rdkit.Chem.Mol
+        Query molecule
+    die_on_error : bool
+        If no match is found, raise an error
+    verbosity : int
+        Sets the verbosity level
+
+    Returns
+    -------
+    iterable
+        Atom map between reference_mol and core_mol
     """
 
     default_values = {'uniquify': True, 'useChirality': False, 'useQueryQueryMatches': False, 'maxMatches': 1000}
@@ -1691,6 +1708,22 @@ def get_substruct_matches_fallback(reference_mol, core_mol, die_on_error=True, v
                     return False
 
     return matches
+
+def join_included_topologies(topology_file, verbosity=0):
+
+    top_data = []
+    for each_line in os_util.read_file_to_buffer(topology_file, die_on_error=True, return_as_list=True,
+                                                 verbosity=verbosity,
+                                                 error_message='Failed to read topology file when joining included '
+                                                               'topologies. Please, check the topology files and '
+                                                               'directory {}'.format(os.path.dirname(topology_file))):
+        if each_line.startswith('#include'):
+            include_file = re.match(r'#include\s+"(.+)"', each_line).groups()[0]
+            include_file = os.path.join(os.path.dirname(topology_file), include_file)
+            top_data.extend(join_included_topologies(include_file, verbosity=0))
+        else:
+            top_data.append(each_line)
+    return top_data
 
 
 def get_atom_map(molecule_a, molecule_b, core_mol, min_atom_map=None, multiple_matches=False, verbosity=0):

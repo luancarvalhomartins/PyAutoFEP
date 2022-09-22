@@ -859,6 +859,96 @@ def prepare_output_scripts_data(header_template=None, script_type='bash', submis
     return return_data
 
 
+def process_input_molecule_entry(this_entry, verbosity=0):
+    """ Process an entry in the input molecules, trying to smartly guess the directory structure
+
+    Parameters
+    ----------
+    this_entry : str
+        Ligand input to process
+    verbosity : int
+        Set the verbosity level
+
+    Returns
+    -------
+    dict
+    """
+
+    from glob import glob
+
+    temp_list = glob(this_entry)
+    if len(temp_list) > 1:
+        # Recursively unpacks nested lists
+        temp_list = [process_input_molecule_entry(i, verbosity=verbosity) for i in temp_list]
+        return temp_list
+    elif len(temp_list) == 1:
+        this_entry = temp_list[0]
+    else:
+        print(temp_list)
+        os_util.local_print('Could not find the file or files corresponding to "{}". Make sure the file exists or that '
+                            'bash-style matches files. This error is likely because the file does not exist.'
+                            ''.format(this_entry),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+        raise FileNotFoundError
+
+    if os.path.splitext(this_entry)[1] == '.pkl':
+        # It's a pickle file and must contain a dict, read it to this_entry
+        import pickle
+
+        try:
+            with open(this_entry, 'rb') as fh:
+                temp_dict = pickle.load(fh)
+            assert isinstance(temp_dict, dict)
+        except (FileNotFoundError, IOError, EOFError, AssertionError) as error:
+            os_util.local_print('Failed to read the input file {}. It was guessed to be a pickle file from its '
+                                'extension.'
+                                ''.format(this_entry),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise error
+        else:
+            this_entry = temp_dict
+    else:
+        try:
+            # Is it a dir?
+            dir_data = os.listdir(this_entry)
+        except NotADirectoryError:
+            # No, so it must be a text file. Check if the extensions suggests a molecule file. Otherwise, read and
+            # parse it.
+            try:
+                if os.path.splitext(this_entry)[1] in ['.mol', '.mol2', '.sdf', '.mdl', '.pdb', '.pdbqt', '.smi',
+                                                       '.smiles', '.csv', '.tsv', '.itp', '.atp', '.top', '.str']:
+                    return this_entry
+            except KeyError:
+                return this_entry
+            else:
+                file_data = os_util.read_file_to_buffer(this_entry, die_on_error=True, return_as_list=False,
+                                                        error_message='Failed to read input ligand file',
+                                                        verbosity=verbosity)
+                temp_dict = os_util.detect_type(file_data, test_for_dict=True, test_for_list=True, verbosity=verbosity)
+                if not isinstance(temp_dict, (dict, list)):
+                    os_util.local_print('Failed to parse file {}. This is the data read:\n{}'
+                                        ''.format(this_entry, temp_dict),
+                                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+                    raise TypeError
+                else:
+                    this_entry = temp_dict
+
+        else:
+            # Read the directory structure, add all files with the same name and different extensions to a value
+            # under key = filename to the dict, if a dir is found, add its contents to a value
+            temp_dict = {}
+            [temp_dict.setdefault(os.path.splitext(each_file)[0], []).append(os.path.join(this_entry, each_file))
+             if not os.path.isdir(os.path.join(this_entry, each_file))
+             else temp_dict.setdefault(os.path.splitext(each_file)[0], []).extend(
+                [os.path.join(this_entry, each_file, inner_file)
+                 for inner_file in
+                 os.listdir(os.path.join(this_entry, each_file))])
+             for each_file in dir_data]
+            this_entry = temp_dict
+
+    return this_entry
+
+
 def parse_input_molecules(input_data, verbosity=0):
     """ Flexible reader for molecules. Tries to guess files/directory structure.
 
@@ -868,72 +958,112 @@ def parse_input_molecules(input_data, verbosity=0):
     """
 
     if isinstance(input_data, str):
-        # User provided a file name, tries to read it
-        if os.path.splitext(input_data)[1] == '.pkl':
-            # It's a pickle file and must contain a dict, read it to input_data
-            import pickle
-            try:
-                with open(input_data, 'rb') as fh:
-                    temp_dict = pickle.load(fh)
-                assert isinstance(temp_dict, dict)
-            except (FileNotFoundError, IOError, EOFError, AssertionError):
-                os_util.local_print('Failed to read the input file {}. It was guessed to be a pickle file from its '
-                                    'extension.'
-                                    ''.format(input_data),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise SystemExit(1)
+        input_data = process_input_molecule_entry(input_data, verbosity=verbosity)
+    elif isinstance(input_data, list):
+        unpacked_data = []
+        for i in input_data:
+            i = process_input_molecule_entry(i, verbosity=verbosity)
+            if isinstance(i, (list, tuple)):
+                unpacked_data.extend(i)
             else:
-                input_data = temp_dict
-        else:
-            try:
-                # Is it a dir?
-                dir_data = os.listdir(input_data)
-            except NotADirectoryError:
-                # No, so it must be a text file. Read and parse it.
-                file_data = os_util.read_file_to_buffer(input_data, die_on_error=False, return_as_list=False,
-                                                        error_message='Failed to read input ligand file',
-                                                        verbosity=verbosity)
-                temp_dict = os_util.detect_type(file_data, test_for_dict=True, test_for_list=True, verbosity=verbosity)
-                if not isinstance(temp_dict, (dict, list)):
-                    os_util.local_print('Failed to parse file {}. This is the data read:\n{}'
-                                        ''.format(input_data, temp_dict),
-                                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
-                else:
-                    input_data = temp_dict
-            except FileNotFoundError:
-                # Last try: try to use glob to match the input files
-                from glob import glob
-                temp_list = glob(input_data)
-                if not input_data:
-                    os_util.local_print('Could not parse input ligand data "{}". Please see documentation'
-                                        ''.format(input_data),
-                                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
-                    raise SystemExit(1)
-                else:
-                    # Because glob will return the full path, use basename to get only file names as ligand names
-                    input_data = {}
-                    [input_data.setdefault(os.path.splitext(os.path.basename(each_file))[0], []).append(each_file)
-                     for each_file in temp_list]
-            else:
-                # Read the directory structure, add all files with the same name and different extensions to a value
-                # under key = filename to the dict, if a dir is found, add its contents to a value
-                temp_dict = {}
-                [temp_dict.setdefault(os.path.splitext(each_file)[0], []).append(os.path.join(input_data, each_file))
-                 if not os.path.isdir(os.path.join(input_data, each_file))
-                 else temp_dict.setdefault(os.path.splitext(each_file)[0], []).extend(
-                    [os.path.join(input_data, each_file, inner_file)
-                     for inner_file in
-                     os.listdir(os.path.join(input_data, each_file))])
-                 for each_file in dir_data]
-                input_data = temp_dict
+                unpacked_data.append(i)
+        input_data = unpacked_data
 
     # User either provided a list or I parsed data to a list, try to figure out names from it
     if isinstance(input_data, list):
+        # Check whether there is a smi or csv file in the list. Use it as the source of the smiles
+        smiles_data = {}
+        for each_file in input_data[:]:
+            if os.path.splitext(each_file)[1] in ['.smi', '.smiles']:
+                # Do not use this file as a molecule file
+                input_data.remove(each_file)
+                this_data = os_util.read_file_to_buffer(each_file, return_as_list=True, die_on_error=True,
+                                                        error_message='Failed to open/read file when processing SMILES '
+                                                                      'from auxiliary file.')
+
+                # Test whether the first line contains a valid smiles. If it does not, it should be a header.
+                for n, each_line in enumerate(this_data):
+                    if len(each_line.rstrip().lstrip()) <= 1:
+                        continue
+                    try:
+                        mol_name = each_line.split()[1]
+                    except KeyError:
+                        os_util.local_print('Failed to parse the auxiliary SMILES file {} at line {}. I will ignore it '
+                                            'and try to go on.'
+                                            ''.format(each_file, n+2),
+                                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                    else:
+                        if mol_name in smiles_data and smiles_data[mol_name] != each_line.split()[1]:
+                            os_util.local_print('Conflicting smiles found for molecule {}. Smiles read were: {} and '
+                                                '{}. I will ignore it and try to go on.'
+                                                ''.format(mol_name, smiles_data[mol_name], each_line.split()[1]),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                        else:
+                            smiles_data[mol_name] = each_line.split()[0]
+
+            elif os.path.splitext(each_file)[1] in ['.csv', '.tsv']:
+                if os.path.splitext(each_file) == '.tsv':
+                    delimiter = '\t'
+                else:
+                    delimiter = ','
+
+                # Do not use this file as a molecule file
+                input_data.remove(each_file)
+                import csv
+                with open(each_file) as fh:
+                    this_data = list(csv.DictReader(fh, delimiter=delimiter))
+
+                # Guess the column name. Note the dumb nested loop to get the correct case.
+                name_columns = ['Name', 'Molecule', 'MolName', 'Compound', 'Cmpd', 'Mol']
+                key_name = False
+                key_smiles = False
+                for k in name_columns:
+                    for each_column in this_data[0]:
+                        if k.lower() == each_column.lower():
+                            key_name = each_column
+                            break
+                        if 'smiles' == each_column.lower():
+                            key_smiles = each_column
+                else:
+                    os_util.local_print('None of the columns in the csv file {} was detected to contain molecule '
+                                        'names. These are the column names accepted: {}'
+                                        ''.format(each_file, name_columns),
+                                        msg_verbosity=os_util.verbosity_level.warning,
+                                        current_verbosity=verbosity)
+
+                for each_line in this_data:
+                    mol_name = each_line[key_name]
+                    if mol_name in smiles_data and smiles_data[mol_name] != each_line[key_smiles]:
+                        os_util.local_print('Conflicting smiles found for molecule {}. Smiles read were: {} and '
+                                            '{}. I will ignore it and try to go on.'
+                                            ''.format(mol_name, smiles_data[mol_name], each_line[key_smiles]),
+                                            msg_verbosity=os_util.verbosity_level.warning,
+                                            current_verbosity=verbosity)
+                    else:
+                        smiles_data[mol_name] = each_line[key_smiles]
+
         # User provided a list. Read files from the list add all files with the same name and different extensions to
         # a value under key = filename to the dict
         ligand_dict = {}
-        [ligand_dict.setdefault(os.path.splitext(os.path.basename(each_file))[0], []).append(each_file)
-         for each_file in input_data]
+        for each_file in input_data:
+            this_ligand_name, this_ext = os.path.splitext(os.path.basename(each_file))
+            # If the input molecule is a .pdbqt and it
+            if this_ext == '.pdbqt' and this_ligand_name.rfind('_out') == len(this_ligand_name) - 4:
+                this_ligand_name = this_ligand_name[:-4]
+            ligand_dict.setdefault(this_ligand_name, []).append(each_file)
+
+        for k, v in smiles_data.items():
+            try:
+                ligand_dict[k].append({'SMILES': v})
+            except KeyError:
+                os_util.local_print('Smiles "{}" read for molecule {}, but molecule not found in the input. This is '
+                                    'normal if your inputs smiles contains molecules are absent in your input '
+                                    'molecules.'
+                                    ''.format(v, k),
+                                    msg_verbosity=os_util.verbosity_level.info,
+                                    current_verbosity=verbosity)
+
     elif isinstance(input_data, dict):
         ligand_dict = {str(os.path.splitext(os.path.basename(k))[0]): v for k, v in input_data.items()}
     elif input_data is None:
@@ -996,7 +1126,8 @@ def parse_poses_data(poses_data, no_checks=False, verbosity=0):
 
 
 @os_util.trace
-def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, threads=1, no_checks=False, verbosity=0):
+def parse_ligands_data(input_ligands, parameterize=None, ignore_problematic_inputs=False, savestate_util=None,
+                       threads=1, no_checks=False, verbosity=0):
     """ Parse input ligands data from a text file, a pickle file, a list, or a dict
 
     Parameters
@@ -1007,6 +1138,10 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
         Should ligands missing parameters be parameterized? If None, no parameterization will be done. If a dict is
         passed, parameterization will de done using data from this dict. Note: if topology files are provided,
         parameterization will not be done.
+    ignore_problematic_inputs : bool
+        By default, parse_ligands_data will raise an error if a molecule fails to be processed. Setting keep_going to
+        True will ask parse_ligands_data to keep going when a problematic molecule is found. The molecues that could not
+        be read will be in the returned dict as 'lig_name': False.
     savestate_util : savestate_util.SavableState
         progress data
     threads : int
@@ -1041,6 +1176,8 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
             # Tries to detect if the file is a molecule file (ie: mol2 or pdb) or a topology (everything else)
             new_dict = {}
             for each_field in each_molecule:
+                if isinstance(each_field, dict):
+                    continue
                 this_ext = os.path.splitext(each_field)[1]
                 if this_ext in ['.mol2', '.mol', '.sdf', '.pdb', '.pdbqt']:
                     # These formats can be read using rdkit directly
@@ -1051,25 +1188,58 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                     elif this_ext == '.sdf':
                         temp_mol = [i for i in rdkit.Chem.SDMolSupplier(each_field) if i is not None]
                         if len(temp_mol) > 1:
-                            os_util.local_print('More than one molecule read from SDF file {}. Currently, this is not '
-                                                'supported. Please, check your your input molecules and split, if '
-                                                'needed.'.format(each_field),
+                            if ignore_problematic_inputs or no_checks:
+                                os_util.local_print('More than one molecule read from SDF file {}. Currently, this is '
+                                                    'not supported. Because you are running with '
+                                                    'ignore_problematic_inputs or no_checks, I will keep going.'
+                                                    ''.format(each_field),
+                                                    msg_verbosity=os_util.verbosity_level.warning,
+                                                    current_verbosity=verbosity)
+                                temp_mol = False
+                            else:
+                                os_util.local_print('More than one molecule read from SDF file {}. Currently, this is '
+                                                    'not supported. Please, check your your input molecules and split, '
+                                                    'if needed.'.format(each_field),
+                                                    msg_verbosity=os_util.verbosity_level.error,
+                                                    current_verbosity=verbosity)
+                                raise SystemExit(-1)
+                        else:
+                            temp_mol = temp_mol[0]
+                    elif this_ext == '.pdb':
+                        # PDB and PDBQT are read using openbabel.
+                        this_smiles = None
+                        for item in each_molecule:
+                            if isinstance(item, dict) and 'SMILES' in item:
+                                this_smiles = item['SMILES']
+                        temp_mol = mol_util.read_small_molecule_from_pdb(each_field, smiles=this_smiles,
+                                                                         die_on_error=not ignore_problematic_inputs)
+                    else:
+                        # PDB and PDBQT are read using openbabel.
+                        this_smiles = None
+                        for item in each_molecule:
+                            if isinstance(item, dict) and 'SMILES' in item:
+                                this_smiles = item['SMILES']
+                        temp_mol = mol_util.read_small_molecule_from_pdbqt(each_field, smiles=this_smiles,
+                                                                           die_on_error=not ignore_problematic_inputs,
+                                                                           verbosity=verbosity)
+
+                    # Molecule read, now some checks
+                    if temp_mol is None or not temp_mol or not isinstance(temp_mol, rdkit.Chem.Mol):
+                        if ignore_problematic_inputs:
+                            os_util.local_print('Failed to read molecule {} as a {} file. Please, check your input.'
+                                                ''.format(each_field, this_ext),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                            new_dict['molecule'] = False
+                            new_dict['error'] = 'Failed to read molecule {} as a {} file. Please, check your input.' \
+                                                ''.format(each_field, this_ext)
+                            continue
+                        else:
+                            os_util.local_print('Failed to read molecule {} as a {} file. Please, check your input.'
+                                                ''.format(each_field, this_ext),
                                                 msg_verbosity=os_util.verbosity_level.error,
                                                 current_verbosity=verbosity)
                             raise SystemExit(-1)
-                        temp_mol = temp_mol[0]
-                    elif this_ext == '.pdb':
-                        # PDB and PDBQT are read using openbabel.
-                        temp_mol = mol_util.read_small_molecule_from_pdb(each_field)
-                    else:
-                        temp_mol = mol_util.read_small_molecule_from_pdbqt(each_field, verbosity=verbosity)
-
-                    # Molecule read, now some checks
-                    if temp_mol is None or not temp_mol:
-                        os_util.local_print('Failed to read molecule {} as a {} file. Please, check your input.'
-                                            ''.format(each_field, this_ext),
-                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                        raise SystemExit(-1)
 
                     try:
                         assert each_name == temp_mol.GetProp('_Name')
@@ -1094,7 +1264,14 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                                                           len(rdkit.Chem.GetMolFrags(temp_mol))),
                                                 msg_verbosity=os_util.verbosity_level.error,
                                                 current_verbosity=verbosity)
-                            raise ValueError('Molecules with multiple fragments not supported.')
+                            if ignore_problematic_inputs:
+                                new_dict['molecule'] = False
+                                new_dict['error'] = 'Failed to read molecule {} as a {} file. Please, check your ' \
+                                                    'input. Molecules with multiple fragments not supported.' \
+                                                    ''.format(each_field, this_ext)
+                                continue
+                            else:
+                                raise ValueError('Molecules with multiple fragments not supported.')
                         if temp_mol.GetNumConformers() != 1:
                             os_util.local_print('Molecule {} ({}) has {} conformers, which is not supported (ie, only '
                                                 'the first conformation will be used). Make sure the input file '
@@ -1103,14 +1280,29 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                                                           temp_mol.GetNumConformers()),
                                                 msg_verbosity=os_util.verbosity_level.error,
                                                 current_verbosity=verbosity)
-                            raise ValueError('Molecules having several conformers or no conformers are not supported.')
+                            if ignore_problematic_inputs:
+                                new_dict['molecule'] = False
+                                new_dict['error'] = 'Failed to read molecule {} as a {} file. Please, check your ' \
+                                                    'input. Molecules having several conformers or no conformers are ' \
+                                                    'not supported.'.format(each_field, this_ext)
+                                continue
+                            else:
+                                raise ValueError('Molecules having several conformers or no conformers are not '
+                                                 'supported.')
                         if not mol_util.has_3d(temp_mol):
                             os_util.local_print('Molecule {} ({}) has no 3D coordinates, which is not supported. Make '
                                                 'sure the input file corresponds to a valid 3D structure.'
                                                 ''.format(temp_mol.GetProp('_Name'), each_field),
                                                 msg_verbosity=os_util.verbosity_level.error,
                                                 current_verbosity=verbosity)
-                            raise ValueError('Molecules having no 3D coordinates not supported.')
+                            if ignore_problematic_inputs:
+                                new_dict['molecule'] = False
+                                new_dict['error'] = 'Failed to read molecule {} as a {} file. Please, check your ' \
+                                                    'input. Molecules having no 3D coordinates not supported.' \
+                                                    ''.format(each_field, this_ext)
+                                continue
+                            else:
+                                raise ValueError('Molecules having no 3D coordinates not supported.')
 
                     # Store mols as PropertyMol to allow pickling of properties
                     new_dict['molecule'] = rdkit.Chem.PropertyMol.PropertyMol(temp_mol)
@@ -1132,10 +1324,12 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise TypeError('Expected dict or list, got {}'.format(type(each_molecule)))
 
-    # User either provided a dict or I parsed data to a dict. Complete it with data form savestate_util, if available
+    # User either provided a dict or I parsed data to a dict. Complete it with data form savestate_util, if available.
+    # Molecules that could not be read will not be saved.
     if savestate_util:
         savestate_util['ligands_data'] = os_util.recursive_update(savestate_util.setdefault('ligands_data', {}),
-                                                                  ligand_dict)
+                                                                  {k: v for k, v in ligand_dict.items()
+                                                                   if v['molecule'] is not False})
         ligand_dict = savestate_util['ligands_data']
         savestate_util.save_data()
 
@@ -1144,21 +1338,28 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
     for each_name, each_data in ligand_dict.items():
         if 'molecule' not in each_data:
             os_util.local_print('Could not find molecule data for ligand {}. Please check your input file or '
-                                'command line arguments. You may want to use parameterize.\n\tLigand data read is:\n'
+                                'command line arguments. Ligand data read is:\n'
                                 '\t{}\n\tData in saved state is:\n\t{}'
                                 ''.format(each_name, ligand_dict,
                                           savestate_util['ligands_data'] if savestate_util
                                           else "< No saved state data >"),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
+        if ignore_problematic_inputs and each_data['molecule'] is False:
+            continue
 
     if parameterize:
         todo_names = []
         todo_mols = []
         for each_name, each_data in ligand_dict.items():
+            if ignore_problematic_inputs and each_data['molecule'] is False:
+                continue
             if 'topology' not in each_data or len(each_data['topology']) == 0:
                 todo_names.append(each_name)
                 todo_mols.append(each_data['molecule'])
+
+        if ignore_problematic_inputs:
+            parameterize.update({'die_on_error': False})
 
         os_util.local_print('Parameterizing the following ligands using {}: {}'.format(parameterize, todo_names),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
@@ -1173,10 +1374,19 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                     param_data = os_util.starmap_unpack(mol_util.parameterize_small_molecule, thread_pool,
                                                         [[i] for i in todo_mols], itertools.repeat(parameterize))
 
-            for each_name, new_top_files in zip(todo_names, param_data):
-                ligand_dict[each_name]['topology'] = new_top_files
+            for each_name, new_files in zip(todo_names, param_data):
+                if new_files is False:
+                    # Parameterization failed for this molecule
+                    if ignore_problematic_inputs:
+                        ligand_dict[each_name]['molecule'] = False
+                        ligand_dict[each_name]['error'] = 'Failed to parameterize molecule. AcPYPE failed.'
+                        continue
+                ligand_dict[each_name].update(new_files)
 
     for each_name, each_data in ligand_dict.items():
+        if ignore_problematic_inputs and each_data['molecule'] is False:
+            continue
+
         if 'topology' not in each_data or len(each_data['topology']) == 0:
             os_util.local_print('Could not find topology data for ligand {}. Please check your input file or '
                                 'command line arguments. You may want to use parameterize.\n'
@@ -1218,14 +1428,31 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
                                             current_verbosity=verbosity)
                         mol_util.rwmol_to_obmol(each_data['molecule']).write('mol2', mol2_file)
                     else:
-                        os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
-                                            'correspondingly .mol2 file was found. A .mol2 file is required to convert '
-                                            'a CGenFF topology to a GROMACS-compatible one. You can rerun with '
-                                            'no_checks so I will try to generate a .mol2 file from the inputs, but '
-                                            'this is not ideal.'.format(str_file),
-                                            msg_verbosity=os_util.verbosity_level.error,
-                                            current_verbosity=verbosity)
-                        raise SystemExit(1)
+                        if ignore_problematic_inputs:
+                            os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
+                                                'correspondingly .mol2 file was found. A .mol2 file is required to '
+                                                'convert a CGenFF topology to a GROMACS-compatible one. Because you '
+                                                'are running with ignore_problematic_inputs, I am going on.'
+                                                ''.format(str_file),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            ligand_dict[each_name]['molecule'] = False
+                            ligand_dict[each_name]['Error'] = 'You supplied a CGenFF .str file ({}) as ligand ' \
+                                                              'topology, but no correspondingly .mol2 file was ' \
+                                                              'found. A .mol2 file is required to convert a CGenFF ' \
+                                                              'topology to a GROMACS-compatible one. Because you are ' \
+                                                              'running with ignore_problematic_inputs, I am going on.' \
+                                                              ''.format(str_file)
+                            continue
+                        else:
+                            os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
+                                                'correspondingly .mol2 file was found. A .mol2 file is required to '
+                                                'convert a CGenFF topology to a GROMACS-compatible one. You can rerun '
+                                                'with no_checks so I will try to generate a .mol2 file from the '
+                                                'inputs, but this is not ideal.'.format(str_file),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise SystemExit(1)
                 output_files = str_to_gmx(str_file=str_file, mol2_file=mol2_file, mol_name=each_name,
                                           force_field_dir=force_field_dir, output_dir=os.path.dirname(str_file),
                                           no_checks=no_checks, verbosity=verbosity)
@@ -1233,29 +1460,69 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
 
                 temp_mol = rdkit.Chem.MolFromMol2File(output_files['molecule'], removeHs=False)
                 if temp_mol is None:
-                    os_util.local_print('Failed to read molecule {} as a {} file during internal conversion from '
-                                        'CHARMM to GROMACS topology files. Please, check your input or try to convert '
-                                        'manually.'
-                                        ''.format(each_name, '.mol2'),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise SystemExit(-1)
+                    if ignore_problematic_inputs:
+                        pass
+                    else:
+                        if ignore_problematic_inputs:
+                            os_util.local_print('Failed to read molecule {} as a {} file during internal conversion '
+                                                'from CHARMM to GROMACS topology files. Please, check your input or '
+                                                'try to convert manually.'
+                                                ''.format(each_name, '.mol2'),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                            ligand_dict[each_name]['molecule'] = False
+                            ligand_dict[each_name]['error'] = 'Failed to read molecule {} as a {} file during ' \
+                                                              'internal conversion from CHARMM to GROMACS topology ' \
+                                                              'files. Please, check your input or try to convert ' \
+                                                              'manually'.format(each_name, '.mol2')
+                            continue
+                        else:
+                            os_util.local_print('Failed to read molecule {} as a {} file during internal conversion '
+                                                'from CHARMM to GROMACS topology files. Please, check your input or '
+                                                'try to convert manually.'
+                                                ''.format(each_name, '.mol2'),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise SystemExit(-1)
                 ligand_dict[each_name]['molecule'] = temp_mol
                 os_util.local_print('Replaced molecule with the one in {}, following the'
                                     ''.format(output_files['molecule']),
                                     msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
         elif len(each_data['topology']) == 1 and os.path.splitext(each_data['topology'][0])[1] == '.str':
-            os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no '
-                                'force field directory was found. A .ff directory is required to convert '
-                                'a CGenFF topology to a GROMACS-compatible one. Please, add a CHARMM force field '
-                                'directory (eg, charmm36-xxx0000.ff) to your input_ligands for molecule {}.'
-                                ''.format(each_name, each_data['topology'][0]),
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
+            if ignore_problematic_inputs:
+                os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no force field '
+                                    'directory was found. A .ff directory is required to convert a CGenFF topology '
+                                    'to a GROMACS-compatible one. Please, add a CHARMM force field directory (eg, '
+                                    'charmm36-xxx0000.ff) to your input_ligands for molecule {}. Because you are '
+                                    'running with ignore_problematic_inputs, I am going on.'
+                                    ''.format(each_name, each_data['topology'][0]),
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                ligand_dict[each_name]['molecule'] = False
+                ligand_dict[each_name]['error'] = 'You supplied a CGenFF .str file ({}) as ligand topology, but no ' \
+                                                  'force field directory was found. A .ff directory is required to ' \
+                                                  'convert a CGenFF topology to a GROMACS-compatible one. Please, ' \
+                                                  'add a CHARMM force field directory (eg, charmm36-xxx0000.ff) to ' \
+                                                  'your input_ligands for molecule {}. Because you are running with ' \
+                                                  'ignore_problematic_inputs, I am going on.' \
+                                                  ''.format(each_name, each_data['topology'][0])
+                continue
+            else:
+                os_util.local_print('You supplied a CGenFF .str file ({}) as ligand topology, but no force field '
+                                    'directory was found. A .ff directory is required to convert a CGenFF topology '
+                                    'to a GROMACS-compatible one. Please, add a CHARMM force field directory (eg, '
+                                    'charmm36-xxx0000.ff) to your input_ligands for molecule {}.'
+                                    ''.format(each_name, each_data['topology'][0]),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
 
     ligand_table = '{:=^50}\n{:^10}{:^20}{:^20}\n'.format(' Input ligands ', ' Name ', 'Molecule', 'Topology')
     table_rows = []
     for this_ligand, lig_data in ligand_dict.items():
+        if ignore_problematic_inputs and lig_data['molecule'] is False:
+            table_rows.append('{:^10} {:^40}'.format(this_ligand, '< FAILED TO LOAD >'))
+            continue
+
         # Safe formatting for ligand name
         lig_mol = lig_data['molecule'] if isinstance(lig_data['molecule'], str) \
             else rdkit.Chem.MolToSmiles(lig_data['molecule'])
@@ -1265,14 +1532,6 @@ def parse_ligands_data(input_ligands, parameterize=None, savestate_util=None, th
     ligand_table += '\n' + '=' * 50
     os_util.local_print(ligand_table,
                         msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
-
-    if len(ligand_dict) <= 1:
-        os_util.local_print('Problem while reading the input ligands. Too few ligands were found.\n\tThis is the data '
-                            'read (command line + config files + progress file):\n\t{}\n\tThis is your (parsed) '
-                            'input_ligands (from either command line and config '
-                            'files):\n\t{}'.format(ligand_dict, input_ligands),
-                            current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
-        raise SystemExit(1)
 
     return ligand_dict
 
@@ -1353,7 +1612,7 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
         for each_line in protein_data.file_lines:
             if isinstance(each_line, all_classes.PDBFile.PDBAtom):
                 output_data.append(each_line.to_line())
-                if each_line == protein_data.atoms[last_protein_atom-1]:
+                if each_line == protein_data.atoms[last_protein_atom - 1]:
                     break
             else:
                 output_data.append(each_line)
@@ -1718,7 +1977,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                                                        error_message='Failed to read system topology file.',
                                                        verbosity=verbosity)
 
-    molecules_pattern = re.compile(r'\[\s+molecules\s+\]', flags=re.IGNORECASE)
+    molecules_pattern = re.compile(r'\[\s+molecules\s+]', flags=re.IGNORECASE)
     water_topology_list = None
     for line_number, each_line in enumerate(system_topology_list):
         if molecules_pattern.match(each_line) is not None:
@@ -1786,7 +2045,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                 continue
 
             if each_ln.split()[0] == 'SOL':
-                topology_data[position+i] = '{} {}\n'.format(water_name, each_ln.split()[1])
+                topology_data[position + i] = '{} {}\n'.format(water_name, each_ln.split()[1])
                 break
         else:
             os_util.local_print('Unable to find SOL molecules in the intermediate topology file {} while '
@@ -3437,6 +3696,14 @@ if __name__ == '__main__':
                                       savestate_util=progress_data, threads=arguments.threads,
                                       no_checks=arguments.no_checks, verbosity=arguments.verbose)
 
+    if len(ligands_dict) <= 1:
+        os_util.local_print('Problem while reading the input ligands. Too few ligands were found.\n\tThis is the data '
+                            'read (command line + config files + progress file):\n\t{}\n\tThis is your (parsed) '
+                            'input_ligands (from either command line and config '
+                            'files):\n\t{}'.format(ligands_dict, arguments.input_ligands),
+                            current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.error)
+        raise SystemExit(1)
+
     input_poses = os_util.detect_type(arguments.poses_input, test_for_dict=True, test_for_list=True,
                                       verbosity=arguments.verbose)
     poses_input = parse_poses_data(input_poses, no_checks=arguments.no_checks, verbosity=arguments.verbose)
@@ -3700,7 +3967,7 @@ if __name__ == '__main__':
         # TODO: allow arbitrary molecule names
         dual_topology_data.molecules[0].name = 'LIG'
 
-        os_util.local_print('{} -> {}'.format(state_a_name, state_b_name), current_verbosity=arguments.verbose,
+        os_util.local_print('{}\u2192{}'.format(state_a_name, state_b_name), current_verbosity=arguments.verbose,
                             msg_verbosity=os_util.verbosity_level.default)
         dual_topology_data.set_lambda_state(0)
 

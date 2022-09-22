@@ -205,17 +205,27 @@ def assemble_shell_command(gmx_bin, arg_list, input_data='', output_file=None, c
 
 
 def detect_type(value, test_for_boolean=True, test_for_dict=False, test_for_list=False, list_max_split=0, verbosity=0):
-    """ Detect and converts
+    """ Detect and converts input types. First, using Python eval. Then, testing for more flexible formats.
 
-    :param Any value: the value to be converted
-    :param bool test_for_boolean: further tests for boolean values
-    :param bool test_for_dict: further tests for flexible-formatted dicts
-    :param bool test_for_list: further tests for flexible-formatted lists
-    :param int list_max_split: if a list is detected and list_max_split is nonzero, at most list_max_split splits occur,
-                               and the remainder of the string is returned as the final element
-    of the list
-    :param int verbosity: sets the verbosity level
-    :rtype: any
+    Parameters
+    ----------
+    value : Any
+        The value to be converted
+    test_for_boolean : bool
+        Also tests for boolean values (false/true, on/off, yes/no)
+    test_for_dict : bool
+        Also tests for flexible-formatted dicts
+    test_for_list : bool
+        Also tests for flexible-formatted lists
+    list_max_split : int
+        If a list is detected and list_max_split is nonzero, at most list_max_split splits occur and the remainder of
+        the string is returned as the final element of the list
+    verbosity : int
+        sets the verbosity level
+
+    Returns
+    -------
+    Any
     """
 
     # If value is not a str there is no need to process it
@@ -234,7 +244,6 @@ def detect_type(value, test_for_boolean=True, test_for_dict=False, test_for_list
                 return True
 
         if test_for_dict:
-            import re
             try:
                 converted_value = {detect_type(each_key): detect_type(each_value.split('#')[0], test_for_list=True,
                                                                       verbosity=verbosity)
@@ -247,13 +256,10 @@ def detect_type(value, test_for_boolean=True, test_for_dict=False, test_for_list
                     local_print('Your input "{}" seems to be a dictionary, but could not be parsed as such. Maybe you '
                                 'want to check your input.'.format(value), msg_verbosity=verbosity_level.warning,
                                 current_verbosity=verbosity)
-                return value
             else:
                 return converted_value
 
         if test_for_list:
-            import re
-
             converted_value = [detect_type(each_value) for each_value in
                                re.split('[;,\n]', value, maxsplit=list_max_split) if each_value]
             if len(converted_value) <= 1:
@@ -300,11 +306,11 @@ def local_print(this_string, msg_verbosity=0, logfile=None, current_verbosity=0)
                                                 '\n[{}] '.format(verbosity_name_dict[msg_verbosity])
                                                 .join(this_string.split('\n')))
         elif msg_verbosity == verbosity_level.error:
-            formatted_string = '[{}] {}'.format(verbosity_name_dict[msg_verbosity],
-                                                '\n[{}] '.format(verbosity_name_dict[msg_verbosity])
-                                                .join(this_string.split('\n')))
-            formatted_string += '\n{:=^50}\n{}{:=^50}'.format(' STACK INFO ', ''.join(traceback.format_stack()),
-                                                              ' STACK INFO ')
+            formatted_string = '\n{:=^50}\n{}{:=^50}\n'.format(' STACK INFO ', ''.join(traceback.format_stack()),
+                                                               ' STACK INFO ')
+            formatted_string += '[{}] {}'.format(verbosity_name_dict[msg_verbosity],
+                                                 '\n[{}] '.format(verbosity_name_dict[msg_verbosity])
+                                                 .join(this_string.split('\n')))
         elif msg_verbosity != verbosity_level.default:
             formatted_string = '[{}] {}'.format(verbosity_name_dict[msg_verbosity],
                                                 '\n[{}] '.format(verbosity_name_dict[msg_verbosity])
@@ -542,3 +548,14 @@ def time(f):
         return value
 
     return wrap_time
+
+
+def flatten(iterable):
+    """ Flattens an iterable """
+    it = iter(iterable)
+    for e in it:
+        if isinstance(e, (list, tuple)):
+            for f in flatten(e):
+                yield f
+        else:
+            yield e

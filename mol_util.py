@@ -266,13 +266,27 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
     # FIXME: assign stereochemistry
 
     rdmol = rdedmol.GetMol()
+    # Fix the formal charge of N. From Greg Landrum's Gist at
+    # https://gist.github.com/greglandrum/7f546d1e35c2df537c68a64d887793b8
+    for each_atom in rdmol.GetAtoms():
+        if each_atom.GetAtomicNum() == 7 and sum([b.GetBondTypeAsDouble() for b in each_atom.GetBonds()]) == 4 \
+                and each_atom.GetFormalCharge() == 0:
+            each_atom.SetFormalCharge(1)
+            os_util.local_print('Setting formal charge of N{} to 1.'.format(each_atom.GetIdx()),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
     try:
         rdmol.UpdatePropertyCache()
     except ValueError as error:
-        os_util.local_print('Failed to convert molecule {} to RWMol. Cannot go on. Please, check your input. Error '
-                            'was {}'.format(openbabel_obmol.GetTitle(), error),
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise error
+        os_util.local_print('Failed to convert molecule {} to RWMol. Retrying with strict=False. Check your input. '
+                            'Error was {}.'.format(openbabel_obmol.GetTitle(), error),
+                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+        try:
+            rdmol.UpdatePropertyCache(strict=False)
+        except ValueError as error:
+            os_util.local_print('Failed to convert molecule {} to RWMol. Cannot go on. Please, check your input. Error '
+                                'was {}.'.format(openbabel_obmol.GetTitle(), error),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            raise error
 
     # Copy coordinates, first generate at least one conformer
     rdkit.Chem.AllChem.EmbedMolecule(rdmol, useRandomCoords=True, maxAttempts=1000, enforceChirality=True,
@@ -742,25 +756,23 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
 
     Returns
     -------
-    list
-        List containing the generated topology files for this ligand
+    dict
+        'topology': list containing the generated topology files for this ligand; 'keepfiles': list of files extra files
+         copied.
     """
     from distutils.dir_util import copy_tree
 
     if not output_dir:
         output_dir = os.getcwd()
-    top_files = []
+    return_data = {'topology': []}
+    top_files = return_data['topology']
 
     timeout = kwargs.get('timeout', None)
+    die_on_error = kwargs.get('die_on_error', True)
+    # Extra files to keep from the acpype result
+    keepfiles = kwargs.get('keepfiles', [])
 
     if param_type == 'acpype':
-        # Check whether ligand parameters are already there
-        new_files = [os.path.join(output_dir, input_molecule.GetProp('_Name') + each_ext)
-                     for each_ext in ['.itp', '.top']]
-        if all([os.path.isfile(f) for f in new_files]):
-            # Parameter files exists in output_dir. Return then
-            return new_files
-
         # TODO: use AcPYPE API instead of subprocess. But it will require acpype to be installed in the same env as
         #  PyAutoFEP, which may or may not be the best option for the user. Maybe using the API, then falling back to
         #  subprocess would be ideal.
@@ -774,14 +786,13 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
         if not executable:
             executable = 'acpype'
 
-        # Extra files to keep from the acpype result
-        keepfiles = kwargs.get('keepfiles', False)
-
         # Total charge is pre-calculated using rdkit. In case acpype guesses it wrong, topology would be wrong.
         cmd_line = [executable, '-i', ligand_file, '-n', str(rdkit.Chem.GetFormalCharge(input_molecule)), '-o', 'gmx',
                     '-b', input_molecule.GetProp('_Name')]
 
         # Parse charge method
+        if charge_method is None:
+            charge_method = 'bcc'
         if charge_method in ['gas', 'bcc', 'user']:
             cmd_line += ['-c', charge_method]
         elif charge_method:
@@ -789,20 +800,74 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
             os_util.local_print('AcPYPE allowed charge methods are "gas","bcc", and "user". Charge method {} cannot be'
                                 'used.'.format(charge_method),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise ValueError('Incompatible charge method {}.'.format(charge_method))
+            if die_on_error:
+                raise ValueError('Incompatible charge method {}.'.format(charge_method))
+            else:
+                return False
 
         # Parse atom types
+        if atom_type is None:
+            atom_type = 'gaff2'
         if atom_type in ['gaff', 'amber', 'gaff2', 'amber2']:
             cmd_line += ['-a', atom_type]
         elif atom_type:
             os_util.local_print('AcPYPE allowed atom types are "gaff", "amber", "gaff2", "amber2". Atom typing {} '
                                 'cannot be used.'.format(atom_type),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise ValueError('Incompatible atom type {}.'.format(atom_type))
+            if die_on_error:
+                raise ValueError('Incompatible atom type {}.'.format(atom_type))
+            else:
+                return False
 
         for each_option in ['qprog', 'max_time']:
             if each_option in kwargs:
                 cmd_line.extend(['--{}'.format(each_option), str(kwargs[each_option])])
+
+        # Check whether ligand parameters are already there. It is done here to make sure we have already set
+        # charge_method and atom_type vars
+        new_files = [os.path.join(output_dir, input_molecule.GetProp('_Name') + each_ext)
+                     for each_ext in ['.itp', '.top']]
+        if all([os.path.isfile(f) for f in new_files]):
+            # Parameter files exists in output_dir. Check for extra files.
+            if keepfiles:
+                new_keepfiles = []
+                for each_extra in keepfiles:
+                    if each_extra == 'mol2':
+                        mol2_file = '{}_{}_{}.mol2'.format(input_molecule.GetProp('_Name'), charge_method, atom_type)
+                        if os.path.isfile(os.path.join(output_dir, mol2_file)):
+                            new_keepfiles.append(mol2_file)
+                        else:
+                            os_util.local_print('Output topologies for ligand {} are aleady present in {}, but the '
+                                                'acpype mol2 file {} was no found. Parameterizing molecule again.'
+                                                ''.format(input_molecule.GetProp('_Name'), output_dir, mol2_file),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                            break
+                    if each_extra == 'all':
+                        alldir = '{}.acpype'.format(input_molecule.GetProp('_Name'))
+                        if os.path.isdir(os.path.join(output_dir, alldir)):
+                            new_keepfiles.append(alldir)
+                        else:
+                            os_util.local_print('Output topologies for ligand {} are aleady present in {}, but the '
+                                                'acpype output directory {} was not found. Parameterizing molecule '
+                                                'again.'
+                                                ''.format(input_molecule.GetProp('_Name'), output_dir, alldir),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                            break
+                    else:
+                        return_data['topology'] = new_files
+                        return_data['keepfiles'] = new_keepfiles
+                        return return_data
+
+            else:
+                return_data['topology'] = new_files
+                return return_data
+
+        # Make sure sqm use a single thread. Parallelization of sqm is less efficient than running several instances in
+        # parallel
+        this_env = os.environ.copy()
+        this_env['OMP_NUM_THREADS'] = '1'
 
         os_util.local_print("Parameterizing small molecule {} using {} and the following options: executable={}, "
                             "charge_method={}, atom_type={}, output_dir={}, verbosity={}. Command line is: \"{}\""
@@ -815,12 +880,16 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
             rdkit.Chem.MolToMolFile(input_molecule, os.path.join(this_tmp_dir, ligand_file))
             try:
                 acpype_run = run(cmd_line, capture_output=True, text=True, cwd=this_tmp_dir, timeout=timeout,
-                                 env=os.environ)
+                                 env=this_env)
             except TimeoutExpired as error:
                 os_util.local_print('AcPYPE run failed due to timeout (timeout={}). The complete run command was {}. '
-                                    ''.format(timeout, ' '.join(cmd_line)),
+                                    'Error was: {}.'
+                                    ''.format(timeout, ' '.join(cmd_line), error),
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise error
+                if die_on_error:
+                    raise error
+                else:
+                    return False
             os_util.local_print('This was the acpype run data: {}'.format(acpype_run),
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
@@ -830,8 +899,11 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
                                     ''.format(' '.join(cmd_line), acpype_run.returncode, acpype_run.stdout,
                                               acpype_run.stderr),
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise CalledProcessError(returncode=acpype_run.returncode, cmd=executable, output=acpype_run.stdout,
-                                         stderr=acpype_run.stderr)
+                if die_on_error:
+                    raise CalledProcessError(returncode=acpype_run.returncode, cmd=executable, output=acpype_run.stdout,
+                                             stderr=acpype_run.stderr)
+                else:
+                    return False
             # Create the destination directory, if needed
             result_dir = os.path.join(this_tmp_dir, input_molecule.GetProp('_Name') + '.acpype')
             try:
@@ -850,7 +922,10 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
                                         ''.format(original_file, acpype_run.returncode, acpype_run.stdout,
                                                   acpype_run.stderr),
                                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise error
+                    if die_on_error:
+                        raise error
+                    else:
+                        return False
 
                 os_util.local_print('Copying {} to {}'.format(original_file, new_file),
                                     msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
@@ -858,17 +933,33 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
 
             if keepfiles:
                 extra_original_files, extra_new_files = [], []
-                # Copy over the GAFF mol2 file
+                # Copy over the antechamber mol2 file
                 if 'mol2' in kwargs['keepfiles']:
-                    extra_original_files.append(os.path.join(result_dir,
-                                                             input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2'))
-                    extra_new_files.append(input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2')
+                    from glob import glob
+                    try:
+                        mol2_file = glob(os.path.join(result_dir, f'{input_molecule.GetProp("_Name")}_*.mol2'))[0]
+                    except KeyError as error:
+                        os_util.local_print('Could not find a return mol2 file in {} after running AcPYPE. '
+                                            'Parameterization may have failed. AcPYPE return code was {} and '
+                                            'output:\n{}\n{}'
+                                            ''.format(result_dir, acpype_run.returncode, acpype_run.stdout,
+                                                      acpype_run.stderr),
+                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                        if die_on_error:
+                            raise error
+                        else:
+                            return False
+                    extra_original_files.append(mol2_file)
+                    extra_new_files.append(os.path.basename(mol2_file))
+
+                    return_data.setdefault('keepfiles', []).append(os.path.basename(mol2_file))
 
                 # Copy the .acpype directory
                 if 'all' in kwargs['keepfiles']:
-                    extra_original_files.append(os.path.join(result_dir,
-                                                             input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2'))
-                    extra_new_files.append(input_molecule.GetProp('_Name') + '_bcc_gaff2.mol2')
+                    extra_original_files.append(result_dir)
+                    acpype_dir = os.path.basename(input_molecule.GetProp('_Name') + '.acpype')
+                    extra_new_files.append(acpype_dir)
+                    return_data.setdefault('keepfiles', []).append(acpype_dir)
 
                 for each_original, each_new in zip(extra_original_files, extra_new_files):
                     original_file = os.path.join(result_dir, each_original)
@@ -883,8 +974,10 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
                                             ''.format(original_file, acpype_run.returncode, acpype_run.stdout,
                                                       acpype_run.stderr),
                                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                        raise error
-
+                        if die_on_error:
+                            raise error
+                        else:
+                            return False
 
     # After writing the initial code below, I found out that, as of 2022.06.02, HTMD parameterize is no longer publicly
     # available (https://github.com/Acellera/htmd/issues/1029). I am keeping this code commented here in the hope that
@@ -942,19 +1035,24 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise ValueError('Unknown parameterization software/library {}.'.format(param_type))
 
-    return top_files
+    return return_data
 
 
-def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=False, verbosity=0):
+def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.5, die_on_error=True, no_checks=False,
+                                   verbosity=0):
     """ Reads PDBQT for a small ligand (ie, it will fail for macromolecules) using meeko, rdkit and openbabel.
 
     Parameters
     ----------
     ligand_file : str
         Input PDBQT file
+    smiles : str
+        Use this smiles to assign bond orders
     charge_error_tol : float
         Maximum error allowed between the sum of PDBQT partial charges and total charge of the read molecule. Because
         total charge is an integer, a large value here should be safe.
+    die_on_error : bool
+        Raise an error when molecule cannot be processed. If False, False will be returned instead.
     no_checks : bool
         Ignore checks and keep going
     verbosity : int
@@ -964,6 +1062,7 @@ def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=
     -------
     rdkit.Chem.Mol
     """
+
     # I was unable to correctly read PDBQT it using pybel. See issue openbabel issue:
     # https://github.com/openbabel/openbabel/issues/2470.
     try:
@@ -976,14 +1075,15 @@ def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=
         # cannot read it. Solution: convert PDBQT to PDB using openbabel, then read it as PDB.
         from all_classes import PDBFile
 
-        # If a SMILES REMARK is present, we can read the PDB using RDKit and avoid openbabel altogether
-        mol_text = os_util.read_file_to_buffer(ligand_file, return_as_list=True)
-        smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
-                                           apply_filter=lambda s: not s.startswith('REMARK'))
-        if smiles_line is not False:
+        if not smiles:
+            # If a SMILES REMARK is present, we can read the PDB using RDKit and avoid openbabel altogether
+            mol_text = os_util.read_file_to_buffer(ligand_file, return_as_list=True)
+            smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
+                                               apply_filter=lambda s: not s.startswith('REMARK'))
+            smiles = mol_text[smiles_line].split()[-1]
+
+        if smiles is not False:
             temp_pdb = PDBFile(ligand_file)
-            for each_atom in temp_pdb.atoms:
-                each_atom.element = ''
             # Prune lines, so that the remaining data is PDB-compatible
             if len(temp_pdb.models) > 1:
                 mol_names = {i.split('=')[1].strip() for j in temp_pdb.models for i in j.__str__()
@@ -991,17 +1091,9 @@ def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=
                 if len(mol_names) == 0:
                     # No "Name =" was found in the pdbqt REMARK records, which suggests that this is not a
                     # Vina/QVina2 output.
-                    if no_checks:
-                        os_util.local_print('No "Name = " found in the REMARK records in {}. Because you are running '
-                                            'with no_checks, I will assume {} contains a single molecule and use it as '
-                                            'is.'.format(ligand_file, ligand_file),
-                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    else:
-                        os_util.local_print('No "Name = " found in the REMARK records in {}. Please, check your '
-                                            'inputs and try again. Alternatively, rerunning with no_check will turn '
-                                            'of this checking.'.format(ligand_file),
-                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                        raise SystemExit(-1)
+                    os_util.local_print('No "Name = " found in the REMARK records in {}. I will assume {} contains a '
+                                        'single molecule and use it as is.'.format(ligand_file, ligand_file),
+                                        msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                 elif len(mol_names) > 1:
                     if no_checks:
                         os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this is '
@@ -1009,20 +1101,42 @@ def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=
                                             'MOLECULES BUT THE FIRST and go on.'.format(mol_names, ligand_file),
                                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                     else:
-                        os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this is '
-                                            'not supported. Please, check your your input molecules and split, if '
-                                            'needed. Alternatively, rerunning with no_check will turn of this '
-                                            'checking.'.format(mol_names, ligand_file),
-                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                        raise SystemExit(-1)
+                        if die_on_error:
+                            os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this '
+                                                'is not supported. Please, check your your input molecules and split, '
+                                                'if needed. Alternatively, rerunning with no_check will turn of this '
+                                                'checking.'.format(mol_names, ligand_file),
+                                                msg_verbosity=os_util.verbosity_level.error,
+                                                current_verbosity=verbosity)
+                            raise SystemExit(-1)
+                        else:
+                            os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this '
+                                                'is not supported. Please, check your your input molecules and split, '
+                                                'if needed. Alternatively, rerunning with no_check will turn of this '
+                                                'checking.'.format(mol_names, ligand_file),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                            return False
 
                 temp_pdb_data = temp_pdb.models[0].__str__()
             else:
                 temp_pdb_data = temp_pdb.to_file()
 
-            temp_pdb_list = [re.sub('\n+', '\n', i) for i in temp_pdb_data if ('{:<6}'.format(i))[:6] in
-                             ['REMARK', 'HETATM', 'ATOM  ', 'MODEL ', 'CONECT', 'COMPND', 'ENDMDL', 'END   ']]
-            read_mol = read_small_molecule_from_pdb(''.join(temp_pdb_list), verbosity=verbosity)
+            try:
+                from openbabel import pybel
+            except ImportError:
+                import pybel
+
+            if verbosity < os_util.verbosity_level.extra_debug:
+                # pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
+                pybel.ob.obErrorLog.StopLogging()
+            else:
+                os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                                    msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
+            # temp_pdb_list = [re.sub('\n+', '\n', i) for i in temp_pdb_data if ('{:<6}'.format(i))[:6] in
+            #                  ['REMARK', 'HETATM', 'ATOM  ', 'MODEL ', 'CONECT', 'COMPND', 'ENDMDL', 'END   ']]
+            temp_pdb_data = pybel.readstring('pdbqt', ''.join(temp_pdb_data))
+            read_mol = read_small_molecule_from_pdb(temp_pdb_data, smiles=smiles, verbosity=verbosity)
 
             return read_mol
 
@@ -1048,31 +1162,34 @@ def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=
             if len(mol_names) == 0:
                 # No "Name =" was found in the pdbqt REMARK records, which suggests that this is not a
                 # Vina/QVina2 output.
-                if no_checks:
-                    os_util.local_print('No "Name = " found in the REMARK records in {}. Because you are running with '
-                                        'no_checks, I will assume {} contains a single molecule and use it as is.'
-                                        ''.format(ligand_file, ligand_file),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                else:
-                    os_util.local_print('No "Name = " found in the REMARK records in {}. Please, check your inputs and '
-                                        'try again. Alternatively, rerunning with no_check will turn of this checking.'
-                                        ''.format(ligand_file),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise SystemExit(-1)
+                os_util.local_print('No "Name = " found in the REMARK records in {}. I will assume {} contains a '
+                                    'single molecule and use it as is.'
+                                    ''.format(ligand_file, ligand_file),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
 
-            if len(mol_names) > 1:
+            elif len(mol_names) > 1:
                 if no_checks:
-                    os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this is not '
-                                        'supported. Because your are running with no_checks, I WILL IGNORE ALL '
+                    os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this is '
+                                        'not supported. Because your are running with no_checks, I WILL IGNORE ALL '
                                         'MOLECULES BUT THE FIRST and go on.'.format(mol_names, ligand_file),
                                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 else:
-                    os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this is not '
-                                        'supported. Please, check your your input molecules and split, if needed. '
-                                        'Alternatively, rerunning with no_check will turn of this checking.'
-                                        ''.format(mol_names, ligand_file),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise SystemExit(-1)
+                    if die_on_error:
+                        os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this '
+                                            'is not supported. Please, check your your input molecules and split, '
+                                            'if needed. Alternatively, rerunning with no_check will turn of this '
+                                            'checking.'.format(mol_names, ligand_file),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        raise SystemExit(-1)
+                    else:
+                        os_util.local_print('More than one molecule ({}) read from PDBQT file {}. Currently, this '
+                                            'is not supported. Please, check your your input molecules and split, '
+                                            'if needed. Alternatively, rerunning with no_check will turn of this '
+                                            'checking.'.format(mol_names, ligand_file),
+                                            msg_verbosity=os_util.verbosity_level.warning,
+                                            current_verbosity=verbosity)
+                        return False
 
             this_mol_name = temp_mol[0].title
             this_tot_charge = sum([i.partialcharge for i in temp_mol[0].atoms])
@@ -1097,26 +1214,45 @@ def read_small_molecule_from_pdbqt(ligand_file, charge_error_tol=0.5, no_checks=
                                         'this will definitely lead to problems!'.format(ligand_file),
                                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 else:
-                    os_util.local_print('Incorrect total charge calculated when reading the input molecule {}. This '
-                                        'means that there was an error when converting and parsing from the PDBQT '
-                                        'format. Please, use another input format. Alternatively, using no_checks '
-                                        'will supress this checking. The molecule total charge is {}, while the sum '
-                                        'of PDBQT partial charges is {} (tolerance = {}). The molecule smiles ie {}.'
-                                        ''.format(ligand_file, rdkit.Chem.GetFormalCharge(temp_mol), this_tot_charge,
-                                                  charge_error_tol, rdkit.Chem.MolToSmiles(temp_mol)),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise SystemExit(-1)
+                    if die_on_error:
+                        os_util.local_print('Incorrect total charge calculated when reading the input molecule {}. '
+                                            'This means that there was an error when converting and parsing from the '
+                                            'PDBQT format. Please, use another input format. Alternatively, using '
+                                            'no_checks will supress this checking. The molecule total charge is {}, '
+                                            'while the sum of PDBQT partial charges is {} (tolerance = {}). The '
+                                            'molecule smiles ie {}.'
+                                            ''.format(ligand_file, rdkit.Chem.GetFormalCharge(temp_mol),
+                                                      this_tot_charge, charge_error_tol,
+                                                      rdkit.Chem.MolToSmiles(temp_mol)),
+                                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                        raise SystemExit(-1)
+                    else:
+                        os_util.local_print('Incorrect total charge calculated when reading the input molecule {}. '
+                                            'This means that there was an error when converting and parsing from the '
+                                            'PDBQT format. Please, use another input format. Alternatively, using '
+                                            'no_checks will supress this checking. The molecule total charge is {}, '
+                                            'while the sum of PDBQT partial charges is {} (tolerance = {}). The '
+                                            'molecule smiles ie {}.'
+                                            ''.format(ligand_file, rdkit.Chem.GetFormalCharge(temp_mol),
+                                                      this_tot_charge, charge_error_tol,
+                                                      rdkit.Chem.MolToSmiles(temp_mol)),
+                                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                        return False
             temp_mol.SetProp('_Name', this_mol_name)
             return temp_mol
 
 
-def read_small_molecule_from_pdb(ligand_data, verbosity=0):
+def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, verbosity=0):
     """ Reads a molecule from a PDB file or block using RDKit, falling back to OpenBabel
 
     Parameters
     ----------
-    ligand_data : str
-        PDB file or PDB block
+    ligand_data : str or pybel.Molecule
+        PDB file, PDB block or a pybel Molecule
+    smiles : str
+        Use this SMILES to assign bond orders
+    die_on_error : bool
+        Raise an error when molecule cannot be processed. If False, False will be returned instead.
     verbosity : int
         Sets verbosity level
 
@@ -1126,84 +1262,157 @@ def read_small_molecule_from_pdb(ligand_data, verbosity=0):
     """
 
     try:
-        read_mol = rdkit.Chem.MolFromPDBFile(ligand_data, removeHs=True)
-    except OSError:
-        read_mol = rdkit.Chem.MolFromPDBBlock(ligand_data, removeHs=True)
-        mol_text = ligand_data.split('\n')
+        from openbabel import pybel
+    except ImportError:
+        import pybel
+
+    if verbosity < os_util.verbosity_level.extra_debug:
+        pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
     else:
-        mol_text = os_util.read_file_to_buffer(ligand_data, return_as_list=True, verbosity=verbosity)
+        os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
+                            msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
 
-    if read_mol is not None:
-        smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
-                                           apply_filter=lambda s: not s.startswith('REMARK'))
-        if smiles_line is not False:
-            smiles = mol_text[smiles_line].split()[-1]
-            if num_explict_hydrogens(read_mol) != 0:
-                os_util.local_print('There are explicit hydrogens in the molecule {}. Removing.'
-                                    ''.format(ligand_data if len(ligand_data) < 30
-                                              else '<{}-chr str>'.format(len(ligand_data))),
-                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-                hs_params = rdkit.Chem.RemoveHsParameters()
-                hs_params.removeDegreeZero = True
-                read_mol = rdkit.Chem.RemoveHs(read_mol, hs_params)
-            ref_mol = rdkit.Chem.MolFromSmiles(smiles)
-            if ref_mol is None:
-                os_util.local_print('Failed to convert SMILES string in molecule {}. SMILES is {}.'
-                                    ''.format(ligand_data if len(ligand_data) < 30
-                                              else '<{}-chr str>'.format(len(ligand_data)), smiles),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise ValueError
-
-            try:
-                read_mol = rdkit.Chem.AllChem.AssignBondOrdersFromTemplate(ref_mol, read_mol)
-            except ValueError as error:
-                os_util.local_print('Failed to match SMILES {} to molecule {}.'
-                                    ''.format(smiles,
-                                              ligand_data if len(ligand_data) < 30
-                                              else '<{}-chr str>'.format(len(ligand_data))),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise error
-
-            read_mol = rdkit.Chem.AddHs(read_mol, addCoords=True, addResidueInfo=True)
-            os_util.local_print('Bond orders in {} set to match the smiles {}.'
-                                ''.format(ligand_data if len(ligand_data) < 30
-                                          else '<{}-chr str>'.format(len(ligand_data)), smiles),
-                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
-            rdkit.Chem.AllChem.AssignStereochemistry(read_mol)
-            rdkit.Chem.AllChem.AssignStereochemistryFrom3D(read_mol, replaceExistingTags=False)
-        else:
-            # There was no SMILES line in the PDB file, cannot use AssignBondOrdersFromTemplate. Fallback to openbabel.
-            read_mol = None
-
-    if read_mol is None:
-        os_util.local_print('Reading PDB {} using RDKit failed, falling back to openbabel.'
-                            ''.format(ligand_data if len(ligand_data) < 30
-                                      else '<{}-chr str>'.format(len(ligand_data))),
-                            msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-        try:
-            from openbabel import pybel
-        except ImportError:
-            import pybel
-
-        if verbosity < os_util.verbosity_level.extra_debug:
-            pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
-        else:
-            os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
-                                msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
-
+    if not isinstance(ligand_data, pybel.Molecule):
+        # First, read molecule using openbabel, as reading with RDKit often leads to spurious structures (completely
+        # wrong bonding). Then, covert to rdkit.Chem.Mol using obmol_to_rwmol. Because openbabel often miss-assign bond
+        # orders, set all bonds to single, and add Hs before converting.
         try:
             ob_molecule = pybel.readstring('pdb', ligand_data)
+            mol_text = ligand_data.split('\n')
         except OSError:
             ob_molecule = pybel.readfile('pdb', ligand_data).__next__()
+            mol_text = os_util.read_file_to_buffer(ligand_data, return_as_list=True, verbosity=verbosity)
+    else:
+        ob_molecule = ligand_data
 
-        ob_molecule.OBMol.AddNonPolarHydrogens()
+    # If assign BO from a SMILES fails, we will fall back to OpenBabel. Save a copy of the original ob_molecule
+    original_ob_molecule = pybel.Molecule(ob_molecule)
+
+    # Reset all bonds to be single bonds.
+    ob_molecule.OBMol.BeginModify()
+    for each_bond in pybel.ob.OBMolBondIter(ob_molecule.OBMol):
+        each_bond.SetBondOrder(1)
+    # Reset all multiplicities to be 1 (calling SetSpinMultiplicity(0) actually )
+    for each_atom in ob_molecule.atoms:
+        each_atom.OBAtom.SetSpinMultiplicity(0)
+    ob_molecule.OBMol.EndModify()
+    ob_molecule.OBMol.AddNonPolarHydrogens()
+    try:
+        read_mol = obmol_to_rwmol(ob_molecule)
+    except (ValueError, rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+            rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
+        ob_molecule.OBMol.AddHydrogens()
         try:
             read_mol = obmol_to_rwmol(ob_molecule)
-        except ValueError:
-            ob_molecule.OBMol.AddHydrogens()
-            read_mol = obmol_to_rwmol(ob_molecule)
+        except (ValueError, rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException) as error:
+            if die_on_error:
+                raise error
+            else:
+                return False
 
-    return read_mol
+    if not smiles:
+        # If a SMILES REMARK is present, we can read use it to assign bond orders.
+        smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
+                                           apply_filter=lambda s: not s.startswith('REMARK'))
+        smiles = mol_text[smiles_line].split()[-1]
+
+    if smiles is not False:
+        if num_explict_hydrogens(read_mol) != 0:
+            os_util.local_print('There are explicit hydrogens in the molecule {}. Removing.'
+                                ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                          else '<{}-chr str>'.format(len(ligand_data.__str__()))),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            hs_params = rdkit.Chem.RemoveHsParameters()
+            hs_params.removeDegreeZero = True
+            read_mol = rdkit.Chem.RemoveHs(read_mol, hs_params)
+
+        # Check read_mol for multiple fragments
+        if len(rdkit.Chem.GetMolFrags(read_mol)) > 1:
+            os_util.local_print('Molecule {} (SMILES={}) has multiple fragments. Trying to join them.'
+                                ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                          else '<{}-chr str>'.format(len(ligand_data.__str__())),
+                                          rdkit.Chem.MolToSmiles(read_mol)),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.warning)
+            # There are more than one fragment in the molecule. Connect them.
+            mol_list = rdkit.Chem.GetMolFrags(read_mol, asMols=True, sanitizeFrags=False)
+            tmp_mol = rdkit.Chem.CombineMols(mol_list[0], mol_list[1])
+            if len(mol_list) > 2:
+                for each_frag in mol_list[2:]:
+                    tmp_mol = rdkit.Chem.CombineMols(tmp_mol, each_frag)
+
+            # Add bonds connecting the fragments. This will bond the closest atoms. First, get the distance matrix
+            # and the topological distance matrix. Then, iterate over the pairs, checking if they are in the same
+            # fragment. When the pair is on different fragments, add a bond to these atoms and update fragment info.
+            # Note that GetDistanceMatrix return 1e8 when the atoms are not connected, so I am using a very high
+            # threshold (999) to check whether that.
+            dist_mat = rdkit.Chem.AllChem.Get3DDistanceMatrix(tmp_mol)
+            topol_dist_mat = rdkit.Chem.GetDistanceMatrix(tmp_mol)
+            for (a1, a2) in numpy.dstack(numpy.unravel_index(numpy.argsort(dist_mat.ravel()),
+                                                             dist_mat.shape))[0]:
+                if topol_dist_mat[a1, a2] > 999:
+                    if tmp_mol.GetAtomWithIdx(int(a1)).GetAtomicNum() == 1 or tmp_mol.GetAtomWithIdx(int(a2)).GetAtomicNum() == 1:
+                        continue
+                    # Atoms belong to different fragments. Add a bond between them, then update topol_dist_mat
+                    tmp_mol = rdkit.Chem.RWMol(tmp_mol)
+                    tmp_mol.AddBond(int(a1), int(a2), order=rdkit.Chem.rdchem.BondType.SINGLE)
+                    tmp_mol = tmp_mol.GetMol()
+                    os_util.local_print('Adding bond between atoms {} and {}.'.format(a1, a2),
+                                        current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.warning)
+
+                    topol_dist_mat = rdkit.Chem.GetDistanceMatrix(tmp_mol, force=True)
+
+            read_mol = tmp_mol
+            os_util.local_print('Joined fragments of {}. New SMILES is "{}".'
+                                ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                          else '<{}-chr str>'.format(len(ligand_data.__str__())),
+                                          rdkit.Chem.MolToSmiles(read_mol)),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
+
+        ref_mol = rdkit.Chem.MolFromSmiles(smiles)
+        if ref_mol is None:
+            os_util.local_print('Failed to convert SMILES string in molecule {}. SMILES is {}. Falling back to '
+                                'OpenBabel'
+                                ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                          else '<{}-chr str>'.format(len(ligand_data.__str__())), smiles),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            read_mol = None
+
+        if ref_mol and read_mol:
+            try:
+                read_mol = assign_bond_orders_from_template_fallback(ref_mol, read_mol, verbosity=verbosity)
+            except ValueError as error:
+                os_util.local_print('Failed to match SMILES {} to molecule {} (SMILES={}). Error was: {}. '
+                                    'Falling back to OpenBabel.'
+                                    ''.format(smiles,
+                                              ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                              else '<{}-chr str>'.format(len(ligand_data.__str__())),
+                                              rdkit.Chem.MolToSmiles(read_mol), error),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                read_mol = None
+
+            else:
+                read_mol = rdkit.Chem.AddHs(read_mol, addCoords=True, addResidueInfo=True)
+                os_util.local_print('Bond orders in {} set to match the smiles {}.'
+                                    ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                              else '<{}-chr str>'.format(len(ligand_data.__str__())), smiles),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+                rdkit.Chem.AllChem.AssignStereochemistry(read_mol)
+                rdkit.Chem.AllChem.AssignStereochemistryFrom3D(read_mol, replaceExistingTags=False)
+        return read_mol
+
+    os_util.local_print('Reading PDB {} using RDKit failed, falling back to openbabel.'
+                        ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
+                                  else '<{}-chr str>'.format(len(ligand_data.__str__()))),
+                        msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
+    try:
+        converted_mol = obmol_to_rwmol(original_ob_molecule, verbosity=verbosity)
+    except (ValueError, rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+            rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
+        return False
+    else:
+        return converted_mol
 
 
 def generic_mol_read(ligand_data, ligand_format=None, no_checks=False, verbosity=0):
@@ -1258,3 +1467,59 @@ def generic_mol_read(ligand_data, ligand_format=None, no_checks=False, verbosity
             return None
 
     return read_mol_data
+
+
+def assign_bond_orders_from_template_fallback(refmol, mol, atom_map=None, sanitize_mol=True, verbosity=0):
+    """ Assigns bond orders to a molecule based on the bond orders in a template molecule. Use
+        get_substruct_matches_fallback to match structures. Based on rdkit.Chem.AllChem.AssignBondOrdersFromTemplate.
+
+    Parameters
+    ----------
+    refmol : rdkit.Chem.Mol
+        The template molecule
+    mol : rdkit.Chem.Mol
+        The molecule to assign bond orders to
+    atom_map : iterable
+        Atom map between refmol -> mol
+    sanitize_mol : bool
+        If True, sanitize the copy of mol before returning it
+    verbosity : int
+        Sets verbosity level
+
+    Returns
+    -------
+    rdkit.Chem.Mol
+        A copy of mol with bond orders updated
+    """
+
+    from merge_topologies import get_substruct_matches_fallback
+
+    refmol2 = rdkit.Chem.Mol(refmol)
+    mol2 = rdkit.Chem.Mol(mol)
+
+    if not atom_map:
+        # No atom mapping supplied, get one using get_substruct_matches_fallback
+        atom_map = get_substruct_matches_fallback(mol2, refmol2, verbosity=verbosity,
+                                                  useChirality=False, useQueryQueryMatches=True)[0]
+
+    # apply matching: set bond properties
+    for b in refmol.GetBonds():
+        atom1 = atom_map[b.GetBeginAtomIdx()]
+        atom2 = atom_map[b.GetEndAtomIdx()]
+        b2 = mol2.GetBondBetweenAtoms(atom1, atom2)
+        b2.SetBondType(b.GetBondType())
+        b2.SetIsAromatic(b.GetIsAromatic())
+    # apply matching: set atom properties
+    for a in refmol.GetAtoms():
+        a2 = mol2.GetAtomWithIdx(atom_map[a.GetIdx()])
+        a2.SetHybridization(a.GetHybridization())
+        a2.SetIsAromatic(a.GetIsAromatic())
+        a2.SetNumExplicitHs(a.GetNumExplicitHs())
+        a2.SetFormalCharge(a.GetFormalCharge())
+
+    if sanitize_mol:
+        rdkit.Chem.SanitizeMol(mol2)
+    if hasattr(mol2, '__sssAtoms'):
+        mol2.__sssAtoms = None  # we don't want all bonds highlighted
+
+    return mol2
