@@ -1766,12 +1766,16 @@ class TopologyData:
             # Ignore empty, comment lines or macros
             if (len(each_line) == 0) or (each_line[0] in [';', '#']):
                 if each_line.startswith('#include'):
-                    os_util.local_print('#include directive found in file {}. This is not supported. Suppressing '
-                                        'import. Should the topology generation fail, double check your topology.'
-                                        ''.format(topology_files),
-                                        msg_verbosity=os_util.verbosity_level.warning,
-                                        current_verbosity=verbosity)
-                    raw_line = '; ' + raw_line + ' ; Suppressed, imports not allowed in ligand topology'
+                    if re.match(r'\#include\s+["\']posre_', each_line, flags=re.IGNORECASE) is None:
+                        # Do not supress imports for position restraints files. Note that this only checks for file
+                        # name. TODO: be more generic here, maybe by process the file and guessing if it is posres file
+                        os_util.local_print('#include directive found in file {}. This is not supported. Suppressing '
+                                            'import. Should the topology generation fail, double check your topology.'
+                                            ''.format(topology_files),
+                                            msg_verbosity=os_util.verbosity_level.warning,
+                                            current_verbosity=verbosity)
+                        raw_line = '; ' + raw_line.rstrip('\n') \
+                                   + ' ; Suppressed, imports not allowed in ligand topology\n'
                 try:
                     actual_moleculetype.output_sequence.append(raw_line)
                 except (UnboundLocalError, AttributeError):

@@ -827,6 +827,7 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
         # charge_method and atom_type vars
         new_files = [os.path.join(output_dir, input_molecule.GetProp('_Name') + each_ext)
                      for each_ext in ['.itp', '.top']]
+        new_files.append(os.path.join(output_dir, 'posre_' + input_molecule.GetProp('_Name') + '.itp'))
         if all([os.path.isfile(f) for f in new_files]):
             # Parameter files exists in output_dir. Check for extra files.
             if keepfiles:
@@ -911,9 +912,14 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
             except FileExistsError:
                 pass
 
-            for each_ext in ['.itp', '.top']:
-                original_file = os.path.join(result_dir, input_molecule.GetProp('_Name') + '_GMX' + each_ext)
-                new_file = os.path.join(output_dir, input_molecule.GetProp('_Name') + each_ext)
+            for each_prefix, each_suffix in zip(['posre_', '', ''], ['.itp', '_GMX.itp', '_GMX.top']):
+                original_file = os.path.join(result_dir,
+                                             '{pre}{name}{ext}'.format(pre=each_prefix,
+                                                                       name=input_molecule.GetProp('_Name'),
+                                                                       ext=each_suffix))
+                new_file = os.path.join(output_dir,
+                                        '{pre}{name}{ext}'.format(pre=each_prefix, name=input_molecule.GetProp('_Name'),
+                                                                  ext=each_suffix))
                 try:
                     shutil.copy2(original_file, new_file)
                 except FileNotFoundError as error:
@@ -934,7 +940,7 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
             if keepfiles:
                 extra_original_files, extra_new_files = [], []
                 # Copy over the antechamber mol2 file
-                if 'mol2' in kwargs['keepfiles']:
+                if 'mol2' in keepfiles:
                     from glob import glob
                     try:
                         mol2_file = glob(os.path.join(result_dir, f'{input_molecule.GetProp("_Name")}_*.mol2'))[0]
@@ -955,7 +961,7 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
                     return_data.setdefault('keepfiles', []).append(os.path.basename(mol2_file))
 
                 # Copy the .acpype directory
-                if 'all' in kwargs['keepfiles']:
+                if 'all' in keepfiles:
                     extra_original_files.append(result_dir)
                     acpype_dir = os.path.basename(input_molecule.GetProp('_Name') + '.acpype')
                     extra_new_files.append(acpype_dir)

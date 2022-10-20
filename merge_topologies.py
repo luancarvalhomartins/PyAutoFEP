@@ -1063,9 +1063,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
                       'matchChiralTag': False, 'threshold': 1.0, 'timeout': 3600, 'seedSmarts': '', 'uniquify': True,
                       'useChirality': False, 'useQueryQueryMatches': False, 'maxMatches': 1000, 'plot': False}
     [kwargs.setdefault(key, value) for key, value in default_values.items()]
-    # FIXME: work around for bug #2801 in rdkit, verbosity must be set to False, otherwise we get a segfault.
-    #  Revert this to `'verbosity': verbosity > 2` when developers fix the bug upstream
-    kwargs['verbose'] = False
+    kwargs['verbose'] = verbosity >= os_util.verbosity_level.extra_debug
 
     # Dumb check for all molecules being the same, so the MCS is the SMILES of any of the molecules
     if len(set([rdkit.Chem.MolToSmiles(each_mol) for each_mol in mol_list])) == 1:
@@ -1131,7 +1129,6 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     matches = get_substruct_matches_fallback(altered_mol_list[0], core_mol, verbosity=verbosity, kwargs=kwargs)
 
     if len(matches) > 1:
-        # FIXME: allow user to supply an atom map so this case is covered
         os_util.local_print('There is more than one possible match between the first MCS and the first molecule.',
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
         match = matches[0]
@@ -1158,7 +1155,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
     try:
         rdkit.Chem.SanitizeMol(common_struct_mol)
     except ValueError:
-        # FIXME: test for a newer version of rdkit which exposes the sanitizaion error
+        # FIXME: test for a newer version of rdkit which exposes the sanitization error
         # Verify if error was caused by atoms from rings that were included in MCS, but are not in a complete ring
         while True:
             try:
@@ -1246,10 +1243,32 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
         for key, each_atom_list in each_mol.items():
             if not each_atom_list:
                 continue
-            each_mol[key] = set(each_atom_list)
-            current_iso = os_util.inner_search(set(each_atom_list), isotopes_list, die_on_error=False)
+            each_atom_list = set(each_atom_list)
+            each_mol[key] = each_atom_list
+            current_iso = os_util.inner_search(lambda x: not each_atom_list.isdisjoint(x), isotopes_list,
+                                               die_on_error=False)
             if current_iso is False:
-                isotopes_list.append(set(each_atom_list))
+                # None of the atoms set is in the sets in list, add this set to the list
+                isotopes_list.append(each_atom_list)
+            else:
+                # At least one atom of this set was already in the list. Now, try to find other elements that contains
+                # atoms from this set
+                found_index = current_iso
+                matched_entries = []
+                while found_index <= len(isotopes_list):
+                    this_found_index = os_util.inner_search(lambda x: not each_atom_list.isdisjoint(x),
+                                                            isotopes_list[found_index + 1:],
+                                                            die_on_error=False)
+                    if this_found_index is not False:
+                        # I found another match. Join to the current set and save to later removal
+                        found_index = this_found_index + found_index + 1
+                        matched_entries.append(found_index)
+                        each_atom_list.update(isotopes_list[found_index])
+                    else:
+                        break
+                for k in reversed(matched_entries):
+                    isotopes_list.pop(k)
+                isotopes_list[current_iso].update(each_atom_list)
 
     unmachable_atom_isotope = 1000
 
@@ -1262,7 +1281,8 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
                                     msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             elif this_atom_map[each_atom.GetIdx()]:
                 # This atom matches an atom from common core, set its isotope
-                new_isotope = os_util.inner_search(this_atom_map[each_atom.GetIdx()], isotopes_list) + 100
+                new_isotope = os_util.inner_search(lambda x: not this_atom_map[each_atom.GetIdx()].isdisjoint(x),
+                                                   isotopes_list) + 100
                 each_atom.SetIsotope(new_isotope)
                 os_util.local_print('Atom {}{} matches common core, isotope = {}'
                                     ''.format(idx, each_atom.GetSymbol(), new_isotope),
