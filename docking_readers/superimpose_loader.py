@@ -122,9 +122,9 @@ def superimpose_poses(ligand_data, reference_pose_mol, save_state=None, num_thre
         this_atommap = kwargs['superimpose_atom_map'].get(ligand_name, None)
 
         thismol = merge_topologies.constrained_embed_shapeselect(each_ligand_mol, rdkit_reference_pose,
-                                                                 num_threads=num_threads, save_state=save_state,
-                                                                 num_conformers=num_conformers, verbosity=verbosity,
-                                                                 atom_map=this_atommap, **kwargs)
+                                                                 num_conformers=num_conformers, num_threads=num_threads,
+                                                                 atom_map=this_atommap, save_state=save_state,
+                                                                 verbosity=verbosity, **kwargs)
         new_docking_poses_data[ligand_name] = thismol
 
         if save_state:

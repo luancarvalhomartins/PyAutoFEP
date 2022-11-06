@@ -288,9 +288,11 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
             raise error
 
+    rdkit.RDLogger.DisableLog('rdApp.*')
     # Copy coordinates, first generate at least one conformer
     rdkit.Chem.AllChem.EmbedMolecule(rdmol, useRandomCoords=True, maxAttempts=1000, enforceChirality=True,
                                      ignoreSmoothingFailures=True)
+    rdkit.RDLogger.EnableLog('rdApp.*')
     if rdmol.GetNumConformers() != 1:
         os_util.local_print('Failed to generate coordinates to molecule',
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
@@ -825,7 +827,7 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
 
         # Check whether ligand parameters are already there. It is done here to make sure we have already set
         # charge_method and atom_type vars
-        new_files = [os.path.join(output_dir, input_molecule.GetProp('_Name') + each_ext)
+        new_files = [os.path.join(output_dir, input_molecule.GetProp('_Name') + '_GMX' + each_ext)
                      for each_ext in ['.itp', '.top']]
         new_files.append(os.path.join(output_dir, 'posre_' + input_molecule.GetProp('_Name') + '.itp'))
         if all([os.path.isfile(f) for f in new_files]):
@@ -1036,7 +1038,7 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
     #     htmd_run = run(cmd_line, capture_output=True, text=True, env=os.environ)
 
     else:
-        os_util.local_print('Unknown parameterization software/library {}. Please, choose between "acpype" or "htmd".'
+        os_util.local_print('Unknown parameterization software/library {}. Currently, only "acpype" is supported.'
                             ''.format(param_type),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise ValueError('Unknown parameterization software/library {}.'.format(param_type))
@@ -1318,7 +1320,7 @@ def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, ve
                 return False
 
     if not smiles:
-        # If a SMILES REMARK is present, we can read use it to assign bond orders.
+        # If a SMILES REMARK is present, we can use it to assign bond orders.
         smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
                                            apply_filter=lambda s: not s.startswith('REMARK'))
         smiles = mol_text[smiles_line].split()[-1]

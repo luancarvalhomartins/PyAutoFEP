@@ -71,12 +71,10 @@ def extract_docking_poses(ligands_dict, no_checks=False, verbosity=0):
             raise TypeError('Ligand must be str or all_classes.Namespace')
 
         if docking_mol_rd is not None:
-            os_util.local_print("Read molecule {} from {}"
-                                "".format(each_name, each_mol),
+            os_util.local_print("Read molecule {} from {}".format(each_name, each_mol),
                                 current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
             docking_mol_rd = mol_util.process_dummy_atoms(docking_mol_rd, verbosity=verbosity)
 
-            # docking_mol_local[each_name] = mol_util.rwmol_to_obmol(docking_mol_rd, verbosity=verbosity)
             docking_mol_local[each_name] = docking_mol_rd
             os_util.local_print('{:<15} {:<18} {:<18}'
                                 ''.format(each_name, each_mol.get('filename', str(each_mol)),

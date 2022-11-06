@@ -153,9 +153,10 @@ def get_crippen_o3a_score(molecule_a, molecule_b, conf_a=-1, conf_b=-1, max_iter
 
 
 @os_util.trace
-def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_atoms=None, randomseed=2342,
-                                  num_conformers=200, volume_function='tanimoto', rigid_molecule_threshold=1,
-                                  num_threads=0, mcs=None, atom_map=None, save_state=None, verbosity=0, **kwargs):
+def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_atoms=None, coord_map=None,
+                                  randomseed=2342, num_conformers=200, volume_function='tanimoto',
+                                  rigid_molecule_threshold=1, num_threads=0, mcs=None, atom_map=None, save_state=None,
+                                  verbosity=0, **kwargs):
     """ Embed a molecule to target used a constrained core and maximizing volume similarity, as measured by
     volume_function. Symmetry will be taken in account.
 
@@ -174,11 +175,15 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
     :param int num_threads: use this many threads during conformer generation (0: max supported)
     :param str mcs: use this SMARTS as common core to merge molecules
     :param list atom_map: if supplied, only an atom map containing all atom pairs in this min_atom_map will be returned,
-                          must be a iterable of tuples or lists
+                          must be an iterable of tuples or lists
     :param savestate_util.SavableState save_state: saved state data
     :param int verbosity: set verbosity level
     :rtype: rdkit.Chem.Mol
     """
+
+    # Check input
+    if matching_atoms and coord_map:
+        raise ValueError("matching_atoms and coord_map are mutually exclusive")
 
     default_values = {'maxAttempts': 50, 'numConfs': num_conformers, 'randomSeed': randomseed, 'useRandomCoords': True,
                       'clearConfs': True, 'ignoreSmoothingFailures': True, 'useExpTorsionAnglePrefs': True,
@@ -190,7 +195,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
         # Clear conformer data
         molecule.RemoveAllConformers()
 
-    if matching_atoms is None:
+    if matching_atoms is None and coord_map is None:
         if mcs is not None:
             this_mcs = mcs
         else:
@@ -311,7 +316,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
 
         for match in matches:
             if len(match) + rigid_molecule_threshold >= molecule.GetNumHeavyAtoms():
-                # If there are too few atoms to be sampled, just generate a single conformation. This will be often
+                # If there are too few atoms to be sampled, just generate a single conformation. This will often be
                 # triggered when the perturbations are small or we are constraining to a reference of the same molecule
 
                 num_conformers = 1
@@ -354,10 +359,26 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
             raise SystemExit(-1)
 
     else:
-        coord_map = {endpoint_atom: target.GetConformer(core_conf_id).GetAtomPosition(target_atom)
-                     for target_atom, endpoint_atom in matching_atoms.items()}
+        if not coord_map:
+            coord_map = {endpoint_atom: target.GetConformer(core_conf_id).GetAtomPosition(target_atom)
+                         for target_atom, endpoint_atom in matching_atoms.items()}
 
-        rdkit.Chem.AllChem.EmbedMultipleConfs(molecule, maxAttempts=kwargs['maxAttempts'], numConfs=kwargs['numConfs'],
+        if len(coord_map) + rigid_molecule_threshold >= molecule.GetNumHeavyAtoms():
+            # If there are too few atoms to be sampled, just generate a single conformation. This will often be
+            # triggered when the perturbations are small or we are constraining to a reference of the same molecule
+
+            num_conformers = 1
+
+            os_util.local_print('The endpoint {} would have {} constrained atoms and {} not constrained ones. A '
+                                'single conformation will be generated (rigid_molecule_threshold = {})'
+                                ''.format(molecule.GetProp('_Name'),
+                                          len(coord_map), molecule.GetNumHeavyAtoms() - len(coord_map),
+                                          rigid_molecule_threshold),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+        else:
+            num_conformers = kwargs['numConfs']
+
+        rdkit.Chem.AllChem.EmbedMultipleConfs(molecule, maxAttempts=kwargs['maxAttempts'], numConfs=num_conformers,
                                               randomSeed=kwargs['randomSeed'],
                                               useRandomCoords=kwargs['useRandomCoords'],
                                               clearConfs=kwargs['clearConfs'], coordMap=coord_map,
@@ -460,13 +481,16 @@ def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol
     temp_mol_a = constrained_embed_shapeselect(temp_mol_a, target, core_conf_id=core_conf_id, randomseed=randomseed,
                                                num_conformers=num_conformers, volume_function=volume_function,
                                                rigid_molecule_threshold=rigid_molecule_threshold,
-                                               num_threads=num_threads, mcs=mcs, mcs_type=mcs_type,
-                                               save_state=savestate, verbosity=verbosity)
-    temp_mol_b = constrained_embed_shapeselect(temp_mol_b, target, core_conf_id=core_conf_id, randomseed=randomseed,
-                                               num_conformers=num_conformers, volume_function=volume_function,
+                                               num_threads=num_threads, mcs=mcs, save_state=savestate,
+                                               verbosity=verbosity, mcs_type=mcs_type)
+    coord_map = {j: temp_mol_a.GetConformer().GetAtomPosition(i) for i, j in pseudomolecule.atom_map}
+
+    temp_mol_b = constrained_embed_shapeselect(temp_mol_b, target, core_conf_id=core_conf_id, coord_map=coord_map,
+                                               randomseed=randomseed, num_conformers=num_conformers,
+                                               volume_function=volume_function,
                                                rigid_molecule_threshold=rigid_molecule_threshold,
-                                               num_threads=num_threads, mcs=mcs, mcs_type=mcs_type,
-                                               save_state=savestate, verbosity=verbosity)
+                                               num_threads=num_threads, mcs=mcs, save_state=savestate,
+                                               verbosity=verbosity, mcs_type=mcs_type)
 
     # Copy coordinates of the best conformers to pseudomolecule's molecules A and B
     pseudomolecule.molecule_a.RemoveAllConformers()
@@ -1025,7 +1049,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
             try:
                 AlignMol(molecule2_embed, core_structure, atomMap=atom_map)
             except ValueError:
-                os_util.local_print('Embending of molecule {} (SMILES = {}) to common core {} with molecule {} '
+                os_util.local_print('Embedding of molecule {} (SMILES = {}) to common core {} with molecule {} '
                                     '(SMILES = {}) has failed. Molecule does not match the core.'
                                     ''.format(molecule2.GetProp("_Name"), rdkit.Chem.MolToSmiles(molecule2),
                                               rdkit.Chem.MolToSmiles(core_structure),
@@ -1033,14 +1057,18 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise SystemExit(1)
 
-    # mergedtopologies_class ('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
-    #                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b', 'dual_molecule_name',
-    #                         'delta_charge'])
-    merged_data = all_classes.MergedTopologies(dual_topology, dual_molecule, common_core_smiles, core_structure,
-                                               molecule1, topology1, molecule2_embed, topology2,
-                                               '{}\u2192{}'.format(molecule1.GetProp("_Name"),
-                                                                   molecule2.GetProp("_Name")),
-                                               delta_charge)
+    merged_data = all_classes.MergedTopologies(dual_topology=dual_topology,
+                                               dual_molecule=dual_molecule,
+                                               mcs=common_core_smiles,
+                                               atom_map=common_atoms,
+                                               common_core_mol=core_structure,
+                                               molecule_a=molecule1,
+                                               topology_a=topology1,
+                                               molecule_b=molecule2_embed,
+                                               topology_b=topology2,
+                                               dual_molecule_name='{}\u2192{}'.format(molecule1.GetProp("_Name"),
+                                                                                      molecule2.GetProp("_Name")),
+                                               delta_charge=delta_charge)
     return merged_data
 
 
@@ -1728,6 +1756,7 @@ def get_substruct_matches_fallback(reference_mol, core_mol, die_on_error=True, v
                     return False
 
     return matches
+
 
 def join_included_topologies(topology_file, verbosity=0):
 

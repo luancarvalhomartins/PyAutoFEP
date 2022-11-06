@@ -615,7 +615,6 @@ class TopologyData:
             if parent_class:
                 self.parent_class = parent_class
 
-            # FIXME: support pairs_nb
             self.atoms_dict = OrderedDict()
             self.bonds_dict = self.DataHolder(n_fields=2)
             self.pairs_dict = self.DataHolder(n_fields=2)
@@ -651,7 +650,7 @@ class TopologyData:
         @staticmethod
         # TODO: automatically detect what are indexes and parameters and format accordingly
         def _format_inline(index_list, parameter_list=None, comment='', align_size=7):
-            """Formats an parameter line
+            """Formats a parameter line
 
             Parameters
             ----------
@@ -681,7 +680,7 @@ class TopologyData:
                     terms = [index_list.__getattribute__(i) for i in index_list.keys() if not i.endswith('_B')]
                     comment += 'Suppressed topology B data: {}' \
                                ''.format('; '.join(['{}: {}'.format(i, index_list.__getattribute__(i))
-                                                   for i in index_list.keys() if i.endswith('_B')]))
+                                                    for i in index_list.keys() if i.endswith('_B')]))
                 else:
                     terms = [index_list.__getattribute__(i) for i in index_list.keys()]
                 if not comment and isinstance(index_list[-1], str):
@@ -697,13 +696,78 @@ class TopologyData:
 
             return inline_param_str
 
+        def make_restraint(self, selection_data=None, output_file=None, force_k=1000):
+            """ Generate a restraint file data from the supplied selection
+
+            Parameters
+            ----------
+            selection_data : str, list
+                Generate restrains for this selection. Available formats are: a str that will be compiled to a regex
+                and matched against atom names; a list with integers, that will be matched against atom indexes, a list
+                with strs that will be (case insensitively) matched against residues name and index (eg, MET50).
+            output_file : str
+                Save restraint data to this file. Is None, restraint data will be returned.
+            force_k : int
+                Force constant for the restraints
+
+            Returns
+            -------
+            str
+                GROMACS-compatible restrains file data
+            """
+
+            restraint_function = 1
+            header = f""";Position restrains generated for the {self.name} molecule using {selection_data} selection.
+
+[ position_restraints ]
+; atom  type      fx      fy      fz
+"""
+
+            selection_data_index, selection_data_residues = [], []
+            atom_match = re.compile('')
+            try:
+                atom_match = re.compile(selection_data)
+            except TypeError as error:
+                if selection_data is None:
+                    pass
+                elif isinstance(selection_data, list):
+                    selection_data_index = [i for i in selection_data if isinstance(i, int)]
+                    selection_data_residues = [i.lower() for i in selection_data if i not in selection_data]
+                else:
+                    raise error
+
+            if selection_data == 'all':
+                restraint_atoms = [atom_index for atom_index, each_atom in self.atoms_dict.items()]
+            else:
+                restraint_atoms = []
+                for atom_index, each_atom in self.atoms_dict.items():
+                    if isinstance(selection_data, list):
+                        if int(each_atom.atom_index) in selection_data_index:
+                            restraint_atoms.append(atom_index)
+                        elif f'{each_atom.residue_name.lower()}{each_atom.residue_number}' in selection_data_residues:
+                            restraint_atoms.append(atom_index)
+
+                    elif atom_match.match(each_atom.atom_name):
+                        restraint_atoms.append(atom_index)
+
+            restr_data = header + '\n'.join([f'{i:<7} {restraint_function:<5} {force_k:<5} {force_k:<5} {force_k:<5}'
+                                             for i in restraint_atoms])
+
+            if output_file is not None:
+                with open(output_file, 'w') as fh:
+                    fh.write(restr_data)
+            else:
+                return restr_data
+
     # Fields for unpacking atomtypes
     __atomtype_dict = {0: namedlist('AtomTypeData', ['atom_type', 'm_u', 'q_e', 'particle_type', 'V', 'W', 'comments'],
                                     defaults=['']),
-                       1: namedlist('AtomTypeData', ['atom_type', 'bonded_type', 'm_u', 'q_e', 'particle_type', 'V', 'W',
-                                                     'comments'], defaults=['']),
-                       2: namedlist('AtomTypeData', ['atom_type', 'atomic_number', 'm_u', 'q_e', 'particle_type', 'V', 'W',
-                                                     'comments'], defaults=['']),
+                       1: namedlist('AtomTypeData',
+                                    ['atom_type', 'bonded_type', 'm_u', 'q_e', 'particle_type', 'V', 'W',
+                                     'comments'], defaults=['']),
+                       2: namedlist('AtomTypeData',
+                                    ['atom_type', 'atomic_number', 'm_u', 'q_e', 'particle_type', 'V', 'W',
+                                     'comments'], defaults=['']),
                        3: namedlist('AtomTypeData', ['atom_type', 'bonded_type', 'atomic_number', 'm_u', 'q_e',
                                                      'particle_type', 'V', 'W', 'comments'], defaults=['']), }
 
@@ -770,8 +834,8 @@ class TopologyData:
     __angledata_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
                                         + ['{}_B'.format(i) for i in this_terms[:-1]]
                                         + [this_terms[-1]]
-                                  for code, this_terms in __angledata_dict.items()
-                                  if code in [1, 2, 5, 8]}
+                                for code, this_terms in __angledata_dict.items()
+                                if code in [1, 2, 5, 8]}
     __angledata_fields_dualtop = {function: ['atom_i', 'atom_j', 'atom_k', 'function', *parameters]
                                   for function, parameters in __angledata_dict_dualtop.items()}
 
@@ -792,10 +856,10 @@ class TopologyData:
     # Fields for unpacking dihedral for lines bearing both topology A and B data (assembles a dict of possible fields
     # list)
     __dihedata_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
-                                      + ['{}_B'.format(i) for i in this_terms[:-1]]
-                                      + [this_terms[-1]]
-                                for code, this_terms in __dihedata_dict.items()
-                                if code in [1, 2, 3, 4, 5, 8, 9]}
+                                     + ['{}_B'.format(i) for i in this_terms[:-1]]
+                                     + [this_terms[-1]]
+                               for code, this_terms in __dihedata_dict.items()
+                               if code in [1, 2, 3, 4, 5, 8, 9]}
     __dihedata_fields_dualtop = {function: ['atom_i', 'atom_j', 'atom_k', 'atom_l', 'function', *parameters]
                                  for function, parameters in __dihedata_dict_dualtop.items()}
 
@@ -843,6 +907,8 @@ class TopologyData:
         self.atomtype_dict = OrderedDict()
         self.output_sequence = []
         self.molecules = []
+
+        self.restraint_files = {}
 
         self.__online_bondtypes = {}
         self.__online_pairtypes = {}
@@ -947,7 +1013,7 @@ class TopologyData:
             with tempfile.TemporaryDirectory() as this_tmpdir:
                 tmp_index = os.path.join(this_tmpdir, 'index.ndx')
                 make_index(new_index_file=tmp_index, structure_data=input_file, gmx_bin=gmx_bin,
-                                                 method='internal', verbosity=verbosity)
+                           method='internal', verbosity=verbosity)
                 molecule_names = read_index_data(tmp_index, verbosity=verbosity).keys()
         elif file_type in ['.top', '.itp']:
             # File is a GROMACS-compatible topology file, read [ system ] definition
@@ -1418,7 +1484,7 @@ class TopologyData:
             molecule_type.output_sequence.extend(new_term_list)
 
     def add_dihedral(self, dihedral_string, molecule_type):
-        """Reads a dihedral dihedral line
+        """Reads a dihedral line
 
         Parameters
         ----------
@@ -1442,7 +1508,7 @@ class TopologyData:
                 # It failed, try to read the parameters as if it's bears only topology A parameters
                 try:
                     this_dihedral = namedlist('DihedralData', self.__dihedata_fields[int(this_dihedral_data[4])],
-                                           defaults=[''])(*this_dihedral_data)
+                                              defaults=[''])(*this_dihedral_data)
                 except (TypeError, KeyError) as error:
                     # It failed, the function does not match the number of parameters
                     os_util.local_print('Error while parsing dihedral line "{}" in molecule {} with error {}'
@@ -1484,25 +1550,13 @@ class TopologyData:
         except (TypeError, KeyError):
             # It failed, try to read the parameters as if it bears a A and B topology data
             try:
-                this_constraint = namedlist('ConstraintDataDual',
-                                            self.__constraint_fields_dualtop[int(this_constraint_data[3])],
+                this_constraint = namedlist('ConstraintData', self.__constraint_fields[int(this_constraint_data[2])],
                                             defaults=[''])(*this_constraint_data)
-            except (TypeError, KeyError):
-                # It failed, try to read the parameters as if it's bears only topology A parameters
-                try:
-                    this_constraint = namedlist('ConstraintData',
-                                                self.__constraint_fields[int(this_constraint_data[3])],
-                                                defaults=[''])(*this_constraint_data)
-                except (TypeError, KeyError) as error:
-                    # It failed, the function does not match the number of parameters
-                    os_util.local_print('Error while parsing constraint line "{}" in molecule {} with error {}'
-                                        ''.format(constraint_string, molecule_type.name, error),
-                                        msg_verbosity=os_util.verbosity_level.error)
-                    raise TypeError('Could not understand constraint line "{}"'.format(constraint_string))
-                else:
-                    molecule_type.constraints_dict.append(this_constraint)
-                    molecule_type.output_sequence.append(molecule_type.constraints_dict[-1])
-
+            except (TypeError, KeyError) as error:
+                os_util.local_print('Error while parsing constraint line {} in molecule {} with error {}'
+                                    ''.format(this_constraint_data, molecule_type, error),
+                                    msg_verbosity=os_util.verbosity_level.error)
+                raise TypeError('Could not understand constraint line {}'.format(constraint_string))
             else:
                 # Test that parameters A and B are the same
                 if not molecule_type.constraints_dict.check_a_b_topology(this_constraint):
@@ -1520,7 +1574,7 @@ class TopologyData:
             molecule_type.output_sequence.extend(new_term_list)
 
     def add_exclusion(self, exclusion_string, molecule_type):
-        """ Reads a exclusion line
+        """ Reads an exclusion line
 
         :param str exclusion_string: exclusion line
         :param MoleculeTypeData molecule_type: MoleculeTypeData object to associate exclusion to
@@ -1536,7 +1590,7 @@ class TopologyData:
         molecule_type.output_sequence.append(molecule_type.exclusions_dict[-1])
 
     def add_atomtype(self, atomtype_string, verbosity):
-        """ Reads a atomtype line. GROMACS manual states that bonded type and atomic number are optional, but it
+        """ Reads an atomtype line. GROMACS manual states that bonded type and atomic number are optional, but it
         doesn't explain how this is done. There is a description at src/gromacs/gmxpreprocess/toppush.cpp:push_at. From
         toppush.cpp (lines 339-367):
 
@@ -1754,6 +1808,25 @@ class TopologyData:
 
         full_topology_file = []
         for each_file in topology_files:
+            if os.path.basename(each_file).startswith('posre'):
+                os_util.local_print('File {} was passed to TopologyData, but from the file name I am assuming it is a '
+                                    'position restraints file. Reading it.'
+                                    ''.format(topology_files),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+                if os.path.basename(each_file) in self.restraint_files:
+                    os_util.local_print('A {} file is was already read for this topology. This maybe caused by passing '
+                                        'the same restraint file multiple times or using multiple restraint files with '
+                                        'the same name. This is not supported. The following topology files were '
+                                        'provided: {}'
+                                        ''.format(os.path.basename(each_file), ', '.join(topology_files)),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise FileExistsError
+
+                this_file_data = os_util.read_file_to_buffer(each_file, die_on_error=True, return_as_list=False,
+                                                             error_message="Could not read position restraint file.",
+                                                             verbosity=verbosity)
+                self.restraint_files[os.path.basename(each_file)] = this_file_data
+                continue
             each_file_data = os_util.read_file_to_buffer(each_file, return_as_list=True, die_on_error=True)
             full_topology_file.extend(each_file_data)
 
@@ -1784,7 +1857,7 @@ class TopologyData:
                 continue
 
             # Test whenever a new declaration has started and update file_marker
-            this_directive = re.match('(?:\[\s+)(.*)(?:\s+\])', each_line, flags=re.IGNORECASE)
+            this_directive = re.match(r'(?:\[\s+)(.*)(?:\s+])', each_line, flags=re.IGNORECASE)
             if this_directive is not None:
                 cur_directive = this_directive.group(1).lower()
                 if cur_directive == 'moleculetype':
@@ -2193,7 +2266,7 @@ class DualTopologyData(TopologyData):
                 else:
                     os_util.local_print('Atom {} not found in internal indexes: atoms_A={}, atoms_B={}, '
                                         'atoms_const={}. Cannot continue.'
-                                        ''.format(atom_name,self.atoms_A, self.atoms_B, self.atoms_const),
+                                        ''.format(atom_name, self.atoms_A, self.atoms_B, self.atoms_const),
                                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                     raise KeyError('Atom {} not found'.format(atom_name))
 
@@ -2224,7 +2297,7 @@ class DualTopologyData(TopologyData):
 
     def __str__(self, style='full'):
         if self._current_lambda_value is None:
-            raise RuntimeError("Call to __str__ before calling set_lambda_state")
+            self.set_lambda_state(lambda_value=0)
         return super().__str__(style=style)
 
 
@@ -2295,7 +2368,6 @@ class MCSResult(dict):
 
 
 class PDBFile:
-
     class PDBModel(list):
         """ Index models in the PDB data """
 
@@ -2315,6 +2387,7 @@ class PDBFile:
 
     class PDBResidue(list):
         """ Index atoms belonging to the same residue """
+
         def __init__(self, resname=''):
             super(PDBFile.PDBResidue, self).__init__()
             self.resname = resname
@@ -2364,6 +2437,7 @@ class PDBFile:
         # 77 - 78        LString(2)    element      Element symbol, right-justified.
         # 79 - 80        LString(2)    charge       Charge  on the atom.
         """
+
         def __init__(self, atom_line, line_num):
             self.line_num = line_num
             self.residue = None
@@ -2385,7 +2459,7 @@ class PDBFile:
                 self.charge = ''
 
         def to_line(self):
-            ret_line = '{:6s}{:5d} {:^4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}          '\
+            ret_line = '{:6s}{:5d} {:^4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}          ' \
                        '{:>2s}{:2s}\n'.format(self.record_name, int(self.serial % 1e5), self.name, self.alt_loc,
                                               self.resname, self.chain, self.res_seq, self.i_code, *self.coords,
                                               self.occupancy, self.beta_temp, self.element, self.charge)
@@ -2536,20 +2610,24 @@ class PDBFile:
         return description
 
 
-# mergedtopologies_class = namedlist('MergedTopologies', ['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol',
-#                                                         'molecule_a', 'topology_a', 'molecule_b', 'topology_b',
-#                                                         'dual_molecule_name', 'delta_charge'])
 class MergedTopologies(Namespace):
     """Holds topology data for merged molecules and topologies
     """
 
-    def __init__(self, dual_topology, dual_molecule, mcs, common_core_mol, molecule_a, topology_a, molecule_b,
+    def __init__(self, dual_topology, dual_molecule, mcs, atom_map, common_core_mol, molecule_a, topology_a, molecule_b,
                  topology_b, dual_molecule_name, delta_charge=0):
         super().__init__()
-        for k, v in zip(['dual_topology', 'dual_molecule', 'mcs', 'common_core_mol', 'molecule_a', 'topology_a',
-                         'molecule_b', 'topology_b', 'dual_molecule_name', 'delta_charge'],
-                        [dual_topology, dual_molecule, mcs, common_core_mol, molecule_a, topology_a, molecule_b,
-                         topology_b, dual_molecule_name, delta_charge]):
+        for k, v in (("dual_topology", dual_topology),
+                     ("dual_molecule", dual_molecule),
+                     ("mcs", mcs),
+                     ("atom_map", atom_map),
+                     ("common_core_mol", common_core_mol),
+                     ("molecule_a", molecule_a),
+                     ("topology_a", topology_a),
+                     ("molecule_b", molecule_b),
+                     ("topology_b", topology_b),
+                     ("dual_molecule_name", dual_molecule_name),
+                     ("delta_charge", delta_charge)):
             self[k] = v
 
     def to_pdb_block(self, molecule_name=None, confId=-1, verbosity=0):
@@ -2579,6 +2657,7 @@ class MergedTopologies(Namespace):
         molecule_b_pdb = [each_line
                           for each_line in MolToPDBBlock(self.molecule_b, confId=confId, flavor=flavor).split('\n')
                           if each_line.find('HETATM') == 0 or each_line.find('ATOM') == 0]
+
         # Suppress END record and empty line after molecule A
         # TODO edit COMPND record?
         return_list = molecule_a_pdb[:-2]
@@ -2590,6 +2669,7 @@ class MergedTopologies(Namespace):
                      for each_atom in self.molecule_b.GetAtoms()
                      if each_atom.GetIdx() not in
                      self.molecule_b.GetSubstructMatch(core_structure)]
+
         os_util.local_print('These are the atoms present only in topology B: {}'.format(only_in_b),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 

@@ -53,6 +53,9 @@ import merge_topologies
 import os_util
 
 
+SPECIAL_SUBSTITUTIONS = '_LENGTH', '_TEMPERATURE', '_PRESSURE'
+
+
 def guess_water_box(solvent_box, pdb2gmx_topology='', verbosity=0):
     """ Guess solvent box to be used in gmx solvate from pdb2gmx topology or from number of points of water model
 
@@ -141,6 +144,48 @@ def set_default_solvate_data(solvate_data):
     return solvate_data
 
 
+def fix_chain_restraint(restraint_file, first_atom=1, verbosity=0):
+    """Edits a restraint file setting the atom indexes to i -= first_atom + 1, therefore converting a restraint that was
+     generated for a molecule in the complex to a valid restraint file.
+
+    Parameters
+    ----------
+    restraint_file : str
+        Input GROMACS-compatible restraint file. Will be editted in place.
+    first_atom : int
+        The index first atom of this group in the complex input that was used to prepare the restraint
+    verbosity : int
+        Sets the verbosity level
+    """
+    directive_match = re.compile(r'\s*\[\s+position_restraints\s+]', flags=re.IGNORECASE)
+
+    restraint_data = os_util.read_file_to_buffer(restraint_file, die_on_error=True, return_as_list=True)
+
+    restraint_data_mod = []
+    found_directive_line = False
+    for each_line in restraint_data:
+        if each_line.lstrip().startswith(';') or each_line.lstrip() == '\n':
+            # This a comment or empty line, append as is
+            pass
+        elif directive_match.match(each_line):
+            found_directive_line = True
+        elif found_directive_line:
+            try:
+                atom_num, fn, f_x, f_y, f_z = each_line.split()
+                atom_num = int(atom_num)
+            except ValueError as error:
+                os_util.local_print(f'Could not parse restraints data from file {restraint_file}. The following '
+                                    f'line could not be understood: {each_line}',
+                                    current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+                raise error
+            else:
+                each_line = f'{atom_num - first_atom + 1:>7} {fn:<5} {f_x:<5} {f_y:<5} {f_z:<5}\n'
+        restraint_data_mod.append(each_line)
+
+    with open(restraint_file, 'w') as fh:
+        fh.writelines(restraint_data_mod)
+
+
 @os_util.trace
 def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='FullSystem.top',
                            index_file='index.ndx', forcefield=1, index_groups=None,
@@ -197,9 +242,11 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     if isinstance(water_mol_name, str):
         list(water_mol_name)
 
+    position_restraint_output = '; Include restraint file\n#ifdef {defname}\n#include "{resfile}"\n#endif\n'
+
     solvate_data = set_default_solvate_data(solvate_data)
 
-    # Save intemediate files used to build the system to this dir
+    # Save intermediate files used to build the system to this dir
     build_system_dir = os.path.join(base_dir, 'protein',
                                     'build_system_{}'.format(time.strftime('%H%M%S_%d%m%Y')))
     os_util.makedir(build_system_dir)
@@ -237,13 +284,17 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                                 'center_tpr': 'center_tpr_step8_{}.tpr',
                                                 'fullsystemcenter_pdb': 'fullsystem_step8_{}.pdb',
                                                 'center_mdout_mdp': 'center_mdout_step8.mdp',
+                                                'posres_ca_top': 'posres_protein_Ca_{{}}_{}.itp',
+                                                'posres_backbone_top': 'posres_protein_BB_{{}}_{}.itp',
                                                 'grompp_center_log': 'grompp_center_step8.log',
                                                 'pdb2gmx_log': 'gmx_pdb2gmx_{}.log',
                                                 'editconf_log': 'gmx_editconf_{}.log',
                                                 'solvate_log': 'gmx_solvate_{}.log',
                                                 'grompp_log': 'gmx_grompp_{}.log',
                                                 'genion_log': 'gmx_genion_{}.log',
-                                                'index_ndx': 'index.ndx'
+                                                'posres_index_ndx': 'posres_index.ndx',
+                                                'index_ndx': 'index.ndx',
+                                                'posres_log': 'protein_posres_Ca.log'
                                                 }.items()}
 
     # These are the final build files
@@ -343,7 +394,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
         raise SystemExit(1)
     [system_topology_list.insert(position + 2, each_line) for each_line in ligatoms_list]
 
-    fn_match = re.compile(r'\s*\[\s+system\s+]').match
+    fn_match = re.compile(r'\s*\[\s+system\s+]', flags=re.IGNORECASE).match
     position = os_util.inner_search(fn_match, system_topology_list, apply_filter=';')
     if position is False:
         new_file_name = os.path.basename(build_files_dict['protein_top'])
@@ -410,7 +461,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise SystemExit(1)
 
-    # 2.5.2 Tries to find restraint files in the topology (this is the case for a single protein chain)
+    # 2.5.1 Tries to find restraint files in the topology (this is the case for a single protein chain)
     search_fn = re.compile(r'#ifdef POSRES\s', flags=re.IGNORECASE)
     position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
     if position is not False:
@@ -440,7 +491,62 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
             elif each_line.lower().startswith('#endif'):
                 break
 
-    # 2.5.2 From protein topology files, tries to read position restraints files and add them to copyfile dict
+        # POSRES_PROTEIN restrains heavy protein atoms
+        system_topology_list[position] = system_topology_list[position].replace('POSRES', 'POSRES_PROTEIN')
+
+        # Generate and the add position restraints for protein Ca
+        for this_filename, restr_group, resrt_define in (
+                (build_files_dict['posres_ca_top'].format('singlechain'), 'C-alpha', 'POSRES_PROTEIN_CA'),
+                (build_files_dict['posres_backbone_top'].format('singlechain'), 'Backbone', 'POSRES_PROTEIN_BB')
+        ):
+            restrt_list = ['genrestr', '-f', build_files_dict['protein_pdb'], '-o', this_filename]
+            os_util.run_gmx(gmx_bin, restrt_list, f'{restr_group}\n', verbosity=verbosity)
+            system_topology_list.insert(position,
+                                        position_restraint_output.format(defname=resrt_define,
+                                                                         resfile=os.path.basename(this_filename)))
+            copyfiles[this_filename] = os.path.basename(this_filename)
+
+        # Save the modified topology file
+        with open(build_files_dict['proteinlig_top'], 'w') as fh:
+            fh.writelines(system_topology_list)
+
+    # 2.5.2 Generate and the add position restraints for protein Ca when there are multiple chains
+    split_chain_list = ['make_ndx', '-f', build_files_dict['protein_pdb'],
+                        '-o', build_files_dict['posres_index_ndx']]
+    os_util.run_gmx(gmx_bin, split_chain_list, 'splitch 1\nsplitch 3\nsplitch 4\nq\n', verbosity=verbosity)
+    index_posre_data = read_index_data(build_files_dict['posres_index_ndx'], verbosity=verbosity)
+    chains_groups_prot = [each_group for each_group in index_posre_data
+                          if re.match(pattern=r'Protein_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
+                          is not None]
+    chains_groups_calpha = [each_group for each_group in index_posre_data
+                            if re.match(pattern=r'C-alpha_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
+                            is not None]
+    chains_groups_backbone = [each_group for each_group in index_posre_data
+                              if re.match(pattern=r'Backbone_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
+                              is not None]
+
+    chain_restr_data = {}
+    for each_filename, each_group_list, resrt_define in (
+            (build_files_dict['posres_ca_top'], chains_groups_calpha, 'POSRES_PROTEIN_CA'),
+            (build_files_dict['posres_backbone_top'], chains_groups_backbone, 'POSRES_PROTEIN_BB')
+    ):
+        for n, (prot_group, each_index_group) in enumerate(zip(chains_groups_prot, each_group_list)):
+            this_filename = each_filename.format(n + 1)
+            restrt_list = ['genrestr', '-f', build_files_dict['protein_pdb'], '-n',
+                           build_files_dict['posres_index_ndx'], '-o', this_filename]
+            os_util.run_gmx(gmx_bin, restrt_list, each_index_group + '\n', verbosity=verbosity)
+
+            fix_chain_restraint(this_filename, index_posre_data[prot_group][0], verbosity=verbosity)
+
+            this_resrt_data = {
+                'posres_filename': this_filename,
+                'topology_string': position_restraint_output.format(defname=resrt_define,
+                                                                    resfile=os.path.basename(this_filename))
+            }
+            chain_restr_data.setdefault(n, []).append(this_resrt_data)
+
+    # 2.5.3 From protein topology files, tries to read position restraints files and add them to copyfile dict
+    chain_count = 0
     for each_file in copyfiles.copy().values():
         each_file = os.path.join(build_system_dir, each_file)
         this_file_data = os_util.read_file_to_buffer(each_file, die_on_error=True, return_as_list=True,
@@ -463,10 +569,26 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                     msg_verbosity=os_util.verbosity_level.warning,
                                     current_verbosity=verbosity)
             else:
+                # This topology file includes a chain topology, assumes
                 old_file_name = line_data[1].strip('"')
                 new_file_name = os.path.join(build_system_dir, old_file_name)
                 shutil.move(old_file_name, new_file_name)
                 copyfiles[new_file_name] = old_file_name
+
+                if 'posre_Protein' in os.path.basename(old_file_name):
+                    # This is a protein restraint file. Use POSRES_PROTEIN to restrain heavy protein atoms
+                    this_file_data[position] = this_file_data[position].replace('POSRES', 'POSRES_PROTEIN')
+
+                    # And position restraints for protein Ca and BB
+                    for this_resrt_data in chain_restr_data[chain_count]:
+                        this_filename = this_resrt_data['posres_filename']
+                        copyfiles[this_filename] = os.path.basename(this_filename)
+                        this_file_data.insert(position, this_resrt_data['topology_string'])
+                    chain_count += 1
+
+        # Save the modified topology file
+        with open(each_file, 'w') as fh:
+            fh.writelines(this_file_data)
 
     # 3. Generate simulation box (gmx editconf) and solvate the complex (gmx solvate)
     box_size = solvate_data['water_shell'] / 10.0
@@ -500,8 +622,8 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
 
     # 5. Add ions to system
     # 5.1. Prepare a dummy mdp to run genion
-    with open(build_files_dict['genion_mdp'], 'wb') as genion_fh:
-        genion_fh.write(b'\n')
+    with open(build_files_dict['genion_mdp'], 'w') as genion_fh:
+        genion_fh.write('\n')
 
     # 5.3. Prepare a tpr to genion
     grompp_list = ['grompp', '-f', build_files_dict['genion_mdp'],
@@ -576,7 +698,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     make_index(build_files_dict['index_ndx'], build_files_dict['fullsystem_pdb'], index_groups, selection_method,
                gmx_bin=gmx_bin, logfile=build_files_dict['makeindex_log'], water_name=water_name, verbosity=verbosity)
 
-    # 7. Copy files do lambda directories
+    # 7. Copy files to lambda directories
     copyfiles.update({build_files_dict['fullsystem_top']: build_files_dict['full_topology_file'],
                       build_files_dict['fullsystemcenter_pdb']: build_files_dict['final_structure_file'],
                       build_files_dict['index_ndx']: build_files_dict['final_index_file']})
@@ -1977,7 +2099,7 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                                                        error_message='Failed to read system topology file.',
                                                        verbosity=verbosity)
 
-    molecules_pattern = re.compile(r'\[\s+molecules\s+]', flags=re.IGNORECASE)
+    molecules_pattern = re.compile(r'\s*\[\s+molecules\s+]', flags=re.IGNORECASE)
     water_topology_list = None
     for line_number, each_line in enumerate(system_topology_list):
         if molecules_pattern.match(each_line) is not None:
@@ -2942,6 +3064,9 @@ def edit_mdp_file(mdp_file, substitutions, outfile=None, no_checks=False, verbos
 
     mdp_data = replace_multi_value_mdp(substitutions, mdp_data, no_checks=no_checks, verbosity=verbosity)
 
+    # Prepare a list of the directives that should be found in the mdp file for substitution. Special "directive" will
+    # not be found, so are not part of the list.
+    directives_not_found = list(set(substitutions.keys()) - set(SPECIAL_SUBSTITUTIONS))
     dt = None
     for index, each_line in enumerate(mdp_data[:]):
         if not each_line or each_line[0] == ';' or each_line.find('=') == -1:
@@ -2951,6 +3076,7 @@ def edit_mdp_file(mdp_file, substitutions, outfile=None, no_checks=False, verbos
         directive = directive.lstrip().rstrip()
         if directive in substitutions:
             mdp_data[index] = '{} = {}         ; Edited by PyAutoFEP\n'.format(directive, substitutions[directive])
+            directives_not_found.remove(directive)
         if directive == 'dt':
             dt = float(value)
 
@@ -2965,6 +3091,12 @@ def edit_mdp_file(mdp_file, substitutions, outfile=None, no_checks=False, verbos
             directive = directive.lstrip().rstrip()
             if directive == 'nsteps':
                 mdp_data[index] = '{} = {}         ; Edited by PyAutoFEP\n'.format(directive, nsteps)
+
+    if directives_not_found:
+        mdp_data.extend(['; Directives added by PyAutoFEP\n', '\n'])
+        for each_directive in directives_not_found:
+            # Some directives were not present in the mdp file. Adding them.
+            mdp_data.append('{} = {}\n'.format(each_directive, substitutions[each_directive]))
 
     try:
         with open(outfile, 'w') as fh:
@@ -3302,9 +3434,9 @@ if __name__ == '__main__':
     build_system.add_argument('--buildsys_ionconcentration', type=float, default=None,
                               help='Concentration, in mol/L, of added ions (Default: 0.15 mol/L)')
     build_system.add_argument('--buildsys_nname', type=str, default=None,
-                              help='Name of the positive ion (Default: CL)')
+                              help='Name of the negative ion (Default: CL)')
     build_system.add_argument('--buildsys_pname', type=str, default=None,
-                              help='Name of the negative ion (Default: NA)')
+                              help='Name of the positive ion (Default: NA)')
 
     presolvated_system = Parser.add_argument_group('pre_solvated', 'Options if a pre-solvated system is supplied '
                                                                    '(ie: --pre_solvated is used)')
@@ -3972,7 +4104,13 @@ if __name__ == '__main__':
         dual_topology_data.set_lambda_state(0)
 
         extra_new_files = {'ligand.atp': dual_topology_data.__str__('atomtypes'),
-                           'ligand.itp': dual_topology_data.__str__('itp')}
+                           'ligand.itp': dual_topology_data.__str__('itp'),
+                           'ligand_posres.itp': dual_topology_data.molecules[0].make_restraint()}
+
+        if extra_new_files['ligand.itp'].find('#ifdef POSRES_LIG') == -1:
+            extra_new_files['ligand.itp'] += '\n\n; Include restraint file\n#ifdef POSRES_LIG\n#include ' \
+                                             '"ligand_posres.itp"\n#endif\n'
+
         create_fep_dirs(morph_dir, base_pert_dir, new_files=extra_new_files, extra_dir=arguments.extradirs,
                         extra_files=arguments.extrafiles, verbosity=arguments.verbose)
 

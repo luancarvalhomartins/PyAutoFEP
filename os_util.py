@@ -30,6 +30,8 @@ from collections import namedtuple
 import traceback
 from ast import literal_eval
 
+import rdkit.Chem
+
 verbosity_level = namedtuple("VerbosityLevel",
                              "error default warning info debug extra_debug timing")(-1, 0, 1, 2, 3, 4, 5)
 
@@ -168,7 +170,7 @@ def assemble_shell_command(gmx_bin, arg_list, input_data='', output_file=None, c
                            verbosity=0):
     """ Return a gmx_bin command with arg_list
 
-    :param [str, list] gmx_bin: path to Gromacs binary
+    :param [str, list] gmx_bin: path to GROMACS binary
     :param list arg_list: pass these args to gmx
     :param str input_data: data to be send to gmx, empty str (default) to send nothing
     :param str output_file: pipe stdout + stderr to this file
@@ -530,10 +532,19 @@ def trace(f):
     """Display argument and context call information of given function."""
     @wraps(f)
     def wrap_trace(*args, **kwargs):
-        local_print("Entering {} with: {} {}".format(_get_scope(f, args), args, kwargs),
+        formatted_args = []
+        for each_arg in args:
+            try:
+                formatted_args.append(f'<rdkit.Chem.rdchem.Mol object at {hex(id(each_arg))} '
+                                      f'(Name="{each_arg.GetProp("_Name")}"; '
+                                      f'SMILES={rdkit.Chem.MolToSmiles(each_arg)})>')
+            except (AttributeError, KeyError):
+                formatted_args.append(each_arg)
+        local_print("Entering {} with: {} {}".format(_get_scope(f, args), formatted_args, kwargs),
                     msg_verbosity=verbosity_level.debug, current_verbosity=kwargs.get('verbosity', 1))
         return f(*args, **kwargs)
     return wrap_trace
+
 
 def time(f):
     """ Time the execution of a function """
