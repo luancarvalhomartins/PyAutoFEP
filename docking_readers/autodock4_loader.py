@@ -116,6 +116,11 @@ def extract_docking_receptor(receptor_file, verbosity=0):
         os_util.local_print('OpenBabel warning messages are on, expect a lot of output.',
                             msg_verbosity=os_util.verbosity_level.extra_debug, current_verbosity=verbosity)
 
+    if isinstance(receptor_file, pybel.Molecule):
+        return receptor_file
+    elif isinstance(receptor_file, pybel.ob.OBMol):
+        return pybel.Molecule(receptor_file)
+
     receptor_format = os.path.splitext(receptor_file)[1].lstrip('.')
     if receptor_format == 'pdbqt':
         receptor_format = 'pdb'

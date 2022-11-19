@@ -81,7 +81,7 @@ conda create -n PyAutoFEP
 conda activate PyAutoFEP
 
 # Install stuff
-conda install -c rdkit rdkit
+conda install -c conda-forge rdkit
 conda install -c conda-forge openbabel
 conda install matplotlib networkx pip
 # Use pip to install pymbar and alchemlyb

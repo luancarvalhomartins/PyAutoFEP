@@ -353,8 +353,10 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                 constrained_embed_forcefield(molecule, core_mol, core_conf_id=core_conf_id, randomseed=randomseed,
                                              atom_map=atom_map, **kwargs)
         if molecule.GetNumConformers() == 0:
-            os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue.'
-                                ''.format(molecule.GetProp("_Name")),
+            os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue. A possible reason '
+                                'for this error is that you are trying to invert a stereocenter, but mcs_type is '
+                                'graph instead of 3d (mcs_type={}).'
+                                ''.format(molecule.GetProp("_Name"), kwargs.get('mcs_type', 'graph')),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(-1)
 
@@ -363,16 +365,17 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
             coord_map = {endpoint_atom: target.GetConformer(core_conf_id).GetAtomPosition(target_atom)
                          for target_atom, endpoint_atom in matching_atoms.items()}
 
-        if len(coord_map) + rigid_molecule_threshold >= molecule.GetNumHeavyAtoms():
+        non_resrt_heavy_atoms = len([each_atom for each_atom in molecule.GetAtoms()
+                                     if each_atom.GetAtomicNum() > 1 and each_atom.GetAtomicNum() not in coord_map])
+        if non_resrt_heavy_atoms > rigid_molecule_threshold:
             # If there are too few atoms to be sampled, just generate a single conformation. This will often be
             # triggered when the perturbations are small or we are constraining to a reference of the same molecule
 
             num_conformers = 1
 
-            os_util.local_print('The endpoint {} would have {} constrained atoms and {} not constrained ones. A '
+            os_util.local_print('The endpoint {} would have {} constrained atoms and {} not constrained heavy atoms. A '
                                 'single conformation will be generated (rigid_molecule_threshold = {})'
-                                ''.format(molecule.GetProp('_Name'),
-                                          len(coord_map), molecule.GetNumHeavyAtoms() - len(coord_map),
+                                ''.format(molecule.GetProp('_Name'), len(coord_map), non_resrt_heavy_atoms,
                                           rigid_molecule_threshold),
                                 msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
         else:
@@ -388,8 +391,10 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                               boxSizeMult=kwargs['boxSizeMult'], numThreads=kwargs['numThreads'])
 
     if molecule.GetNumConformers() == 0:
-        os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue'
-                            ''.format(molecule.GetProp("_Name")),
+        os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue. A possible reason '
+                            'for this error is that you are trying to invert a stereocenter, but mcs_type is '
+                            'graph instead of 3d (mcs_type={}).'
+                            ''.format(molecule.GetProp("_Name"), kwargs.get('mcs_type', 'graph')),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(-1)
 

@@ -3133,11 +3133,20 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
         else:
             # Process lines
             perturbation_map_input = OrderedDict()
-            for each_line in typed_data.split(os.linesep):
+            try:
+                typed_data = typed_data.split(os.linesep)
+            except AttributeError:
+                pass
+
+            for each_line in typed_data:
                 if len(each_line) < 1 or each_line[0] in ['#', ';'] or each_line.split() == []:
                     continue
 
-                each_line = each_line.split()
+                try:
+                    each_line = each_line.split()
+                except AttributeError:
+                    pass
+
                 if len(each_line) == 2:
                     perturbation_map_input[(each_line[0], each_line[1])] = {}
                 elif len(each_line) > 2:
