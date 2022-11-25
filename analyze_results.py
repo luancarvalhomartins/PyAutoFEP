@@ -1192,7 +1192,13 @@ def collect_from_xvg(xvg_directory, unk_file='unk_matrix.pkl', temperature=None,
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
         return None
 
-    data = dist.collect_results_from_xvg.process_xvg_to_dict(xvg_input_files, temperature=temperature)
+    try:
+        data = dist.collect_results_from_xvg.process_xvg_to_dict(xvg_input_files, temperature=temperature)
+    except KeyError as error:
+        os_util.local_print('Failed to collect data from the directory {}.'.format(xvg_directory),
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+        raise error
+
     savedata = {'u_nk_data': data, 'read_files': data, 'temperature': temperature}
 
     with open(os.path.join(xvg_directory, unk_file), 'wb') as fh:
@@ -1444,7 +1450,8 @@ if __name__ == '__main__':
         data_dir = tempdir.name
     else:
         data_dir = arguments.input
-        arguments.output_plot_directory = arguments.input
+        if not arguments.output_plot_directory:
+            arguments.output_plot_directory = arguments.input
         os_util.local_print('Loading data from {}, interpreting it as a directory.'.format(arguments.input),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
         if arguments.output_uncompress_directory is not None and not arguments.no_checks:

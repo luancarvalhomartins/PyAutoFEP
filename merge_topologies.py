@@ -98,8 +98,8 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
                                                         useExpTorsionAnglePrefs=kwargs['useExpTorsionAnglePrefs'],
                                                         useBasicKnowledge=kwargs['useBasicKnowledge'])
         if this_conf_id < 0:
-            os_util.local_print('Failed to embed molecule {} in constrained_embed_forcefield. Cannot '
-                                'continue.'.format(rdkit.Chem.MolToSmiles(molecule)),
+            os_util.local_print('Failed to embed molecule {} in constrained_embed_forcefield. Cannot continue.'
+                                ''.format(rdkit.Chem.MolToSmiles(molecule)),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             return False
         else:
@@ -303,7 +303,14 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                             ''.format(rdkit.Chem.MolToSmiles(core_mol)),
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
 
-        core_mol = rdkit.Chem.RemoveHs(core_mol)
+        try:
+            core_mol = rdkit.Chem.RemoveHs(core_mol)
+        except rdkit.Chem.rdchem.KekulizeException:
+            os_util.local_print('Failed to sanitize the molecular representation of the common core: {}. Could not '
+                                'remove Hs. Going on.'
+                                ''.format(rdkit.Chem.MolToSmiles(core_mol)),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
         core_mol = mol_util.adjust_query_properties(core_mol, verbosity=verbosity)
 
         # Prepare a coordinate map to supply to EmbedMultipleConfs
@@ -1512,7 +1519,7 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
     rdkit.Chem.AllChem.EmbedMolecule(molecule_a, clearConfs=True, useRandomCoords=True, ignoreSmoothingFailures=True,
                                      boxSizeMult=kwargs.get('boxSizeMult', 2.0))
 
-    # Prepare a MCS ignoring chirality. This will guide the selection of atoms viable to be included in the final MCS
+    # Prepare an MCS ignoring chirality. This will guide the selection of atoms viable to be included in the final MCS
     kwargs.update(matchChiralTag=False)
     achiral_mcs = find_mcs([molecule_a, molecule_b], savestate=None, verbosity=verbosity, **kwargs)
     os_util.local_print('Achiral MCS: {}'.format(achiral_mcs.smartsString),

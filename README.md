@@ -3,7 +3,7 @@
 
 PyAutoFEP is a tool to automate Free Energy Perturbations (FEP) calculations to estimate Relative Free Energies of Binding (RFEB) of small molecules to 
 macromolecular targets. It automates the generation of perturbation maps, the building of dual-topologies for ligand pairs, the setup of MD systems, and 
-the analysis. Distinctivelly, PyAutoFEP supports multiple force fields, integrates enhanced sampling methods, and allows flexible λ windows schemes. 
+the analysis. Distinctively, PyAutoFEP supports multiple force fields, integrates enhanced sampling methods, and allows flexible λ windows schemes. 
 Furthermore, it aims to be as flexible as possible, giving the user great control over all steps. Nevertheless, reasonable defaults and automation are 
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 

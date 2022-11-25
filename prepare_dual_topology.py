@@ -1451,7 +1451,7 @@ def parse_ligands_data(input_ligands, parameterize=None, ignore_problematic_inpu
     if savestate_util:
         savestate_util['ligands_data'] = os_util.recursive_update(savestate_util.setdefault('ligands_data', {}),
                                                                   {k: v for k, v in ligand_dict.items()
-                                                                   if v['molecule'] is not False})
+                                                                   if v.get('molecule', False) is not False})
         ligand_dict = savestate_util['ligands_data']
         savestate_util.save_data()
 
@@ -3118,6 +3118,18 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
     perturbation_map_input = os_util.detect_type(perturbation_map_input, test_for_dict=True, test_for_list=True)
     if isinstance(perturbation_map_input, dict):
         pass
+    elif isinstance(perturbation_map_input, (list, tuple)):
+        if all([isinstance(each_element, (list, tuple)) and len(each_element) == 2
+                for each_element in perturbation_map_input]):
+            perturbation_map_input = {(i, j): dict() for each_element in perturbation_map_input for i, j in each_element}
+        elif len(perturbation_map_input) % 2 == 0:
+            perturbation_map_input = {(i, j): dict() for i, j
+                                      in zip(perturbation_map_input[0::2], perturbation_map_input[1::2])}
+        else:
+            os_util.local_print('Failed to understand list structure in the perturbation_map. Value read was "{}"'
+                                ''.format(perturbation_map_input, type(perturbation_map_input)),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+            raise SystemExit(1)
     elif isinstance(perturbation_map_input, str):
         file_name = perturbation_map_input
         file_data = os_util.read_file_to_buffer(file_name, die_on_error=False, return_as_list=False,
@@ -3163,7 +3175,7 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
                     raise ValueError('At least 2 fields are required'.format(type(perturbation_map_input)))
 
     else:
-        os_util.local_print('Failed to read perturbation_map as dict or string (or None or False, ie: '
+        os_util.local_print('Failed to read perturbation_map as dict, string or list (or None or False, ie: '
                             'read from save state data). Value "{}" was read as a(n) {}'
                             ''.format(perturbation_map_input, type(perturbation_map_input)),
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)

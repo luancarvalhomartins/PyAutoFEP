@@ -445,6 +445,7 @@ def verify_molecule_name(molecule, moldict, new_default_name=None, verbosity=0):
                                     ''.format(this_mol_name),
                                     msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
+    this_mol_name = os.path.splitext(os.path.basename(this_mol_name))[0]
     if this_mol_name in moldict:
         colliding_name = this_mol_name
         this_mol_name = '{}_1'.format(this_mol_name)
@@ -1323,9 +1324,10 @@ def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, ve
         # If a SMILES REMARK is present, we can use it to assign bond orders.
         smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
                                            apply_filter=lambda s: not s.startswith('REMARK'))
-        smiles = mol_text[smiles_line].split()[-1]
+        if smiles_line is not False:
+            smiles = mol_text[smiles_line].split()[-1]
 
-    if smiles is not False:
+    if smiles:
         if num_explict_hydrogens(read_mol) != 0:
             os_util.local_print('There are explicit hydrogens in the molecule {}. Removing.'
                                 ''.format(ligand_data.__str__() if len(ligand_data.__str__()) < 30
