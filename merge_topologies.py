@@ -423,8 +423,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
     if molecule.GetNumConformers() == 0:
         os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue. A possible reason '
                             'for this error is that you are trying to invert a stereocenter, but mcs_type is '
-                            'graph instead of 3d (mcs_type={}).'
-                            ''.format(molecule.GetProp("_Name"), kwargs.get('mcs_type', 'graph')),
+                            'graph instead of 3d (mcs_type={}, chiral_data_mol={}).'
+                            ''.format(molecule.GetProp("_Name"), kwargs.get('mcs_type', 'graph'), chiral_data_mol),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise SystemExit(-1)
 

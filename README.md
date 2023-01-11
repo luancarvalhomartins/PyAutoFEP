@@ -8,6 +8,11 @@ Furthermore, it aims to be as flexible as possible, giving the user great contro
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 
 ## Announcements
+**Commit f20b3c0 (11.01.2023)**<br/>
+This commit changes the poses reading. Before it, `prepare_dual_topology.py` would read poses for every molecule in the 
+input molecules, although only the poses for which the A states are needed would ever be used. Now, only the poses 
+needed will be read. This speeds up execution, specially when using `pose_loader=superimpose`.
+
 **Commit c6e427c (06.11.2022)**<br/>
 This commit fixes the restraint code. Restraints can be selected by passing `mdp_substitution` to `prepare_dual_topology.py`, eg:
 ```ini

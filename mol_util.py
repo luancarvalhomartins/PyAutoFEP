@@ -276,7 +276,7 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                     try:
                         this_bond.SetStereoAtoms(ob_to_rw_atom_map[openbabel_obmol.GetAtomById(i).GetId()],
                                                  ob_to_rw_atom_map[openbabel_obmol.GetAtomById(j).GetId()])
-                    except RuntimeError:
+                    except (RuntimeError, AttributeError):
                         rdkit.RDLogger.EnableLog('rdApp.*')
                         continue
                     else:
@@ -427,6 +427,7 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
 
     rdkit.Chem.SanitizeMol(rdmol)
     rdkit.Chem.AssignStereochemistry(rdmol)
+    rdkit.Chem.AssignStereochemistryFrom3D(rdmol)
 
     os_util.local_print("obmol_to_rwmol converted molecule {} (name: {}). Pybel SMILES: {} to rdkit SMILES: {}"
                         "".format(openbabel_obmol,

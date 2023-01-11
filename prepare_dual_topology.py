@@ -3264,8 +3264,8 @@ def align_ligands(receptor_structure, poses_input=None, poses_reference_structur
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
     if ligands_to_read and poses_input:
-        poses_input = poses_input.copy()
-        for each_ligand in poses_input:
+        poses_input_temp = poses_input.copy()
+        for each_ligand in poses_input_temp:
             if each_ligand not in ligands_to_read:
                 del poses_input[each_ligand]
         if set(poses_input) != set(ligands_to_read):
