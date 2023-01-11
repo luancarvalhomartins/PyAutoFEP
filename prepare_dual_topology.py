@@ -1137,7 +1137,7 @@ def parse_input_molecules(input_data, verbosity=0):
                     this_data = list(csv.DictReader(fh, delimiter=delimiter))
 
                 # Guess the column name. Note the dumb nested loop to get the correct case.
-                name_columns = ['Name', 'Molecule', 'MolName', 'Compound', 'Cmpd', 'Mol']
+                name_columns = ['Name', 'Molecule', 'MolName', 'Compound', 'Cmpd', 'Mol', 'Names']
                 key_name = False
                 key_smiles = False
                 for k in name_columns:
@@ -1147,23 +1147,28 @@ def parse_input_molecules(input_data, verbosity=0):
                             break
                         if 'smiles' == each_column.lower():
                             key_smiles = each_column
+                            break
+                    if key_smiles and key_name:
+                        break
                 else:
                     os_util.local_print('None of the columns in the csv file {} was detected to contain molecule '
                                         'names. These are the column names accepted: {}'
                                         ''.format(each_file, name_columns),
-                                        msg_verbosity=os_util.verbosity_level.warning,
+                                        msg_verbosity=os_util.verbosity_level.error,
                                         current_verbosity=verbosity)
+                    raise SystemExit(1)
 
-                for each_line in this_data:
-                    mol_name = each_line[key_name]
-                    if mol_name in smiles_data and smiles_data[mol_name] != each_line[key_smiles]:
-                        os_util.local_print('Conflicting smiles found for molecule {}. Smiles read were: {} and '
-                                            '{}. I will ignore it and try to go on.'
-                                            ''.format(mol_name, smiles_data[mol_name], each_line[key_smiles]),
-                                            msg_verbosity=os_util.verbosity_level.warning,
-                                            current_verbosity=verbosity)
-                    else:
-                        smiles_data[mol_name] = each_line[key_smiles]
+                if key_name:
+                    for each_line in this_data:
+                        mol_name = each_line[key_name]
+                        if mol_name in smiles_data and smiles_data[mol_name] != each_line[key_smiles]:
+                            os_util.local_print('Conflicting smiles found for molecule {}. Smiles read were: {} and '
+                                                '{}. I will ignore it and try to go on.'
+                                                ''.format(mol_name, smiles_data[mol_name], each_line[key_smiles]),
+                                                msg_verbosity=os_util.verbosity_level.warning,
+                                                current_verbosity=verbosity)
+                        else:
+                            smiles_data[mol_name] = each_line[key_smiles]
 
         # User provided a list. Read files from the list add all files with the same name and different extensions to
         # a value under key = filename to the dict
@@ -1966,7 +1971,7 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
             raise subprocess.SubprocessError(stderr)
         else:
-            output_files = [mol_name + os.extsep + each_extension for each_extension in ['prm', 'itp']]
+            output_files = [mol_name.lower() + os.extsep + each_extension for each_extension in ['prm', 'itp']]
             output_files += [edited_mol2]
             if output_dir is not None:
                 for this_file_name in output_files:
@@ -2609,6 +2614,18 @@ def edit_mdp_prepare_rerun(mdp_input, mdp_outfile, verbosity=0):
             edited_mdp.append('nstxout             = 0\n')
         elif each_line.startswith('nstlog'):
             edited_mdp.append('nstlog              = 0\n')
+        elif each_line.startswith('define'):
+            defines_to_keep = []
+            line_data = each_line.split('=')[1].split()
+            for each_def in line_data:
+                if 'POSRES' not in each_def:
+                    os_util.local_print('The define {} read from your mdp for the run step does not seem to be a '
+                                        'position restraint define (ie, it does not contain POSRES), therefore it will '
+                                        'be kept for the rerun step. If this is a position restraint YOUR RESULTS '
+                                        'WILL BE INCORRECT!'.format(each_def),
+                                        msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                    defines_to_keep.append(each_def)
+            edited_mdp.append('define = {}'.format(' '.join(defines_to_keep)))
         else:
             edited_mdp.append(each_line)
     with open(mdp_outfile, 'w+') as file_handler:
@@ -3205,7 +3222,7 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
 
 def align_ligands(receptor_structure, poses_input=None, poses_reference_structure=None, pose_loader='generic',
                   reference_pose_superimpose=None, superimpose_loader_ligands=None, ligand_residue_name='LIG',
-                  cluster_docking_data=None, save_state=False, verbosity=0, **kwargs):
+                  cluster_docking_data=None, ligands_to_read=None, save_state=False, verbosity=0, **kwargs):
     """ Align ligands from a docking structure to the MD-equilibrated frame or the input structure
 
     :param pybel.Molecule receptor_structure: md frame to be used in the alignment
@@ -3245,6 +3262,17 @@ def align_ligands(receptor_structure, poses_input=None, poses_reference_structur
                                 'macromolecular structure.'
                                 ''.format(receptor_structure.title),
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
+    if ligands_to_read and poses_input:
+        poses_input = poses_input.copy()
+        for each_ligand in poses_input:
+            if each_ligand not in ligands_to_read:
+                del poses_input[each_ligand]
+        if set(poses_input) != set(ligands_to_read):
+            os_util.local_print('Not all ligands in the perturbation map as starting points of FEP are in the pose '
+                                'input. Cannot go on. Please, see the manual.',
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
 
     # Loads poses data
     if pose_loader == 'pdb':
@@ -3302,9 +3330,11 @@ def align_ligands(receptor_structure, poses_input=None, poses_reference_structur
             raise SystemExit(1)
         if not superimpose_loader_ligands:
             os_util.local_print('Missing superimpose_loader_ligands, required for pose loader superimpose. Please, '
-                                'see python reference.',
+                                'see the manual.',
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
+        if ligands_to_read:
+            superimpose_loader_ligands = {k: v for k, v in superimpose_loader_ligands.items() if k in ligands_to_read}
 
         docking_mol_local = superimpose_poses(superimpose_loader_ligands, reference_pose_superimpose,
                                               save_state=save_state, verbosity=verbosity, **kwargs)
@@ -3880,22 +3910,6 @@ if __name__ == '__main__':
     else:
         arguments.poses_advanced_options = {}
 
-    # Reads poses data. If a custom MCS was supplied as str (ie, all MCS should custom), use it during pose loading.
-    # Otherwise, user wants only specific pairs (of ligands) to use a custom MCS, so use find_mcs during pose loading.
-    poses_mcs = custom_mcs_data if isinstance(custom_mcs_data, str) else None
-    poses_mol_data = align_ligands(receptor_structure_mol, poses_input,
-                                   poses_reference_structure=arguments.poses_reference_structure,
-                                   reference_pose_superimpose=arguments.poses_reference_pose_superimpose,
-                                   superimpose_loader_ligands=ligands_dict,
-                                   pose_loader=arguments.pose_loader, mcs=poses_mcs, save_state=progress_data,
-                                   verbosity=arguments.verbose, **arguments.poses_advanced_options)
-
-    if not poses_mol_data:
-        os_util.local_print('Failed during the align ligands step. Cannot continue.',
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-
-        raise SystemExit(-1)
-
     # Reads a perturbation file or reads from savable state data
     if arguments.perturbation_map:
 
@@ -3975,6 +3989,23 @@ if __name__ == '__main__':
                          current_verbosity=arguments.verbose)
      for mol_a, mol_b in perturbation_map]
     os_util.local_print('=' * 50, msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
+
+    # Reads poses data. If a custom MCS was supplied as str (ie, all MCS should custom), use it during pose loading.
+    # Otherwise, user wants only specific pairs (of ligands) to use a custom MCS, so use find_mcs during pose loading.
+    poses_mcs = custom_mcs_data if isinstance(custom_mcs_data, str) else None
+    poses_mol_data = align_ligands(receptor_structure_mol, poses_input,
+                                   poses_reference_structure=arguments.poses_reference_structure,
+                                   reference_pose_superimpose=arguments.poses_reference_pose_superimpose,
+                                   superimpose_loader_ligands=ligands_dict,
+                                   ligands_to_read=[mol_a for mol_a, mol_b in perturbation_map],
+                                   pose_loader=arguments.pose_loader, mcs=poses_mcs, save_state=progress_data,
+                                   verbosity=arguments.verbose, **arguments.poses_advanced_options)
+
+    if not poses_mol_data:
+        os_util.local_print('Failed during the align ligands step. Cannot continue.',
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+
+        raise SystemExit(-1)
 
     original_base_pert_dir = arguments.perturbations_dir if arguments.perturbations_dir \
         else 'perturbations_{}'.format(time.strftime('%H%M%S_%d%m%Y'))
@@ -4429,6 +4460,8 @@ if __name__ == '__main__':
 
         os_util.local_print('Input data written to {}'.format('{}.bin'.format(original_base_pert_dir)))
     elif arguments.output_packing == 'tgz':
+        os_util.local_print('Compressing data to {}.tgz'.format(original_base_pert_dir),
+                            current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.default)
         with tarfile.open('{}.tgz'.format(original_base_pert_dir), mode='w:gz') as tarfh:
             tarfh.add(base_pert_dir, original_base_pert_dir)
         tmpdir.cleanup()
@@ -4457,3 +4490,6 @@ if __name__ == '__main__':
                             'output_packing',
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
         raise SystemExit(-1)
+
+    os_util.local_print('Done preparing FEP perturbations',
+                        current_verbosity=arguments.verbose, msg_verbosity=os_util.verbosity_level.default)

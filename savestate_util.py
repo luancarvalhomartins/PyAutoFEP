@@ -175,7 +175,13 @@ class SavableState(Namespace):
         from rdkit.Chem.Draw import MolDraw2DSVG
         from rdkit.Chem.AllChem import Compute2DCoords
 
-        this_mol = self.ligands_data[mol_name]['molecule']
+        try:
+            this_mol = self.ligands_data[mol_name]['molecule']
+        except KeyError:
+            os_util.local_print('Molecule name {} not found in the ligands data. Cannot draw it to a 2D svg'
+                                ''.format(mol_name),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            return False
         self.ligands_data[mol_name].setdefault('images', {})
 
         if not {'2d_hs', '2d_nohs'}.issubset(self.ligands_data[mol_name]['images']):
@@ -190,9 +196,16 @@ class SavableState(Namespace):
             temp_mol = rdkit.Chem.RemoveHs(temp_mol)
             Compute2DCoords(temp_mol)
             draw_2d_svg = MolDraw2DSVG(300, 300)
-            draw_2d_svg.DrawMolecule(temp_mol)
-            draw_2d_svg.FinishDrawing()
-            svg_data_no_hs = draw_2d_svg.GetDrawingText()
+            try:
+                draw_2d_svg.DrawMolecule(temp_mol)
+            except RuntimeError:
+                os_util.local_print('Removing hydrogens of {} would break chirality. I will no generate a '
+                                    'representation without Hs'.format(mol_name),
+                                    msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+                svg_data_no_hs = svg_data_hs
+            else:
+                draw_2d_svg.FinishDrawing()
+                svg_data_no_hs = draw_2d_svg.GetDrawingText()
 
             self.ligands_data[mol_name]['images'].update({'2d_hs': svg_data_hs, '2d_nohs': svg_data_no_hs})
 

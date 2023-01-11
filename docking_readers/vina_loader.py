@@ -25,6 +25,7 @@ import all_classes
 import os_util
 import mol_util
 from docking_readers.generic_loader import extract_docking_poses
+import rdkit.Chem
 
 
 def extract_vina_poses(ligands_dict, poses_data=None, no_checks=False, verbosity=0):
@@ -62,10 +63,11 @@ def extract_vina_poses(ligands_dict, poses_data=None, no_checks=False, verbosity
     docking_poses_data = os_util.parse_simple_config_file(poses_data, verbosity=verbosity)
 
     for each_name, each_mol in ligands_dict.items():
+        cluster_num = docking_poses_data.get(each_name, 1)
         # Use OpenBabel to read input pdbqt file
         try:
-            # FIXME: use mol_util.read_small_molecule_from_pdbqt here
-            this_lig_data = [p for p in pybel.readfile('pdbqt', each_mol)]
+            this_lig_data = mol_util.read_small_molecule_from_pdbqt(ligand_file=each_mol, die_on_error=True,
+                                                                    use_model=cluster_num-1, verbosity=verbosity)
             assert this_lig_data
         except (OSError, IOError) as error_data:
             if no_checks:
@@ -93,29 +95,18 @@ def extract_vina_poses(ligands_dict, poses_data=None, no_checks=False, verbosity
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise SystemExit(1)
         else:
-            cluster_num = docking_poses_data.get(each_name, 1)
+            original_file_path = ligands_dict[each_name]
+            ligands_dict[each_name] = all_classes.Namespace()
+            ligands_dict[each_name].filename = original_file_path
+            ligands_dict[each_name].format = 'pdbqt'
             try:
-                this_lig_pose = this_lig_data[cluster_num - 1]
-            except IndexError as error_data:
-                if no_checks:
-                    os_util.local_print('Failed to read Vina/QVina2 input file {} when parsing docking data for {}. '
-                                        'Cluster {} not found. Because you are running with no_checks, I am trying to '
-                                        'go on.'
-                                        ''.format(each_name, each_name, cluster_num),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    continue
-                else:
-                    os_util.local_print('Failed to read Vina/QVina2 input file {} when parsing docking data for {}. '
-                                        'Cluster {} not found.'
-                                        ''.format(each_name, each_name, cluster_num),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise error_data
-            else:
-                original_file_path = ligands_dict[each_name]
-                ligands_dict[each_name] = all_classes.Namespace()
-                ligands_dict[each_name].filename = original_file_path
-                ligands_dict[each_name].format = 'pdbqt'
-                ligands_dict[each_name].data = mol_util.obmol_to_rwmol(this_lig_pose, verbosity=verbosity)
-                ligands_dict[each_name].comment = 'cluster {}'.format(cluster_num)
+                ligands_dict[each_name].data = mol_util.obmol_to_rwmol(this_lig_data, verbosity=verbosity)
+            except (rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                    rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException) as error:
+                os_util.local_print('Could not understand pose for molecule {}. Please, check your input files. '
+                                    'Because .pdbqt files lack connectivity information'.format(each_name),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise error
+            ligands_dict[each_name].comment = 'cluster {}'.format(cluster_num)
 
     return extract_docking_poses(ligands_dict, verbosity=verbosity)

@@ -160,25 +160,45 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
     """ Embed a molecule to target used a constrained core and maximizing volume similarity, as measured by
     volume_function. Symmetry will be taken in account.
 
-    :param rdkit.Chem.Mol molecule: molecule to be embed
-    :param rdkit.Chem.Mol target: the molecule to use as a source of constraints
-    :param int core_conf_id: id of the core conformation to use (default: detect)
-    :param dict matching_atoms: dict of atoms in molecule matching target. If None (default) find_mcs will be used to
-                                generate a match
-    :param int randomseed: seed to EmbedMolecule and EmbedMultipleConfs
-    :param int num_conformers: generate this much trial conformers to find a best shape match
-    :param [str, function] volume_function: use this function for calculate shape similarity ('protude' or 'tanimoto'
-                                            (default)), or a function (so that f(mol1: rdkit.Chem.Mol,
-                                            mol2: rdkit.Chem.Mol, conformation1: int, conformation2: int) -> float)
-    :param int rigid_molecule_threshold: consider a molecule to be rigid if up to this many heavy atoms are not
-        constrained (default 1; -1: molecule is always flexible)
-    :param int num_threads: use this many threads during conformer generation (0: max supported)
-    :param str mcs: use this SMARTS as common core to merge molecules
-    :param list atom_map: if supplied, only an atom map containing all atom pairs in this min_atom_map will be returned,
-                          must be an iterable of tuples or lists
-    :param savestate_util.SavableState save_state: saved state data
-    :param int verbosity: set verbosity level
-    :rtype: rdkit.Chem.Mol
+    Parameters
+    ----------
+    molecule : rdkit.Chem.Mol
+        Molecule to be embed
+    target : rdkit.Chem.Mol
+        Molecule to be uses as a source of constraints. If coord_map is supplied, this will be ignored.
+    core_conf_id : int
+        Id of the target conformation to use (default: detect)
+    matching_atoms : dict
+        A dictionary mapping atoms in molecule to matching atoms in target. If None (default), find_mcs will be used to
+        generate a match.
+    coord_map : dict
+        A dictionary mapping atom IDs->coordinates. This will require some atoms to have fixed coordinates in the
+        resulting conformation. Note that passing this will cause constrained_embed_shapeselect to ignore target.
+    randomseed : int
+        Pass this random seed to EmbedMolecule and EmbedMultipleConfs
+    num_conformers : int
+        Generate this much trial conformers to find a best shape match
+    volume_function : str
+        Use this function for calculate shape similarity ('protude', 'tanimoto' (default), 'o3a', and 'crippeno3a'), or
+        any user defined function
+    rigid_molecule_threshold : int
+        Consider a molecule to be rigid if up to this many heavy atoms are not constrained (default 1; -1:
+        molecule is always flexible)
+    num_threads : int
+        Use this many threads during conformer generation (0: max supported)
+    mcs : str
+        Use this SMARTS as common core beteween molecule and target
+    atom_map : list
+        If supplied, only an atom map containing all atom pairs in this atom_map will be returned
+    save_state : savestate_util.SavableState
+        Save state data
+    verbosity : int
+        Set verbosity level
+
+    Returns
+    -------
+    rdkit.Chem.Mol
+        Molecule embed to target
     """
 
     # Check input
@@ -266,8 +286,10 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
 
             this_atom_map = get_atom_map(molecule_a=molecule, molecule_b=target, core_mol=core_mol,
                                          min_atom_map=atom_map, verbosity=verbosity)
+            tmp_kwargs = kwargs.copy()
+            tmp_kwargs['enforceChirality'] = True
             constrained_embed_forcefield(molecule, target, core_conf_id=core_conf_id, randomseed=randomseed,
-                                         atom_map=this_atom_map, num_conformations=1, **kwargs)
+                                         atom_map=this_atom_map, num_conformations=1, **tmp_kwargs)
             return molecule
 
         temp_core_structure = mol_util.loose_replace_side_chains(target, core_mol, use_chirality=True)
@@ -305,7 +327,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
 
         try:
             core_mol = rdkit.Chem.RemoveHs(core_mol)
-        except rdkit.Chem.rdchem.KekulizeException:
+        except (rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
             os_util.local_print('Failed to sanitize the molecular representation of the common core: {}. Could not '
                                 'remove Hs. Going on.'
                                 ''.format(rdkit.Chem.MolToSmiles(core_mol)),

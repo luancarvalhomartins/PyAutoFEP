@@ -22,8 +22,8 @@
 #
 
 import os
-import re
 import shutil
+import itertools
 
 import rdkit
 import rdkit.Chem
@@ -113,25 +113,6 @@ def rwmol_to_obmol(rdkit_rwmol, verbosity=0):
             new_obmol.CloneData(new_data)
 
     # FIXME: assign stereochemistry
-    # si = rdkit.Chem.FindPotentialStereo(mol)
-    # for element in si:
-    #     print(f'  Type: {element.type}, Which: {element.centeredOn}, Specified: {element.specified},
-    #     Descriptor: {element.descriptor} ')
-    #
-    # facade = pybel.ob.OBStereoFacade(m)
-    # for atom in pybel.ob.OBMolAtomIter(m):
-    #     mid = atom.GetId()
-    #     if facade.HasTetrahedralStereo(mid):
-    #         tetra = facade.GetTetrahedralStereo(mid)
-    #         if tetra.IsSpecified():
-    #             num_tetra += 1
-    #
-    # for bond in pybel.ob.OBMolBondIter(m):
-    #     mid = bond.GetId()
-    #     if facade.HasCisTransStereo(mid):
-    #         cistrans = facade.GetCisTransStereo(mid)
-    #         if cistrans.IsSpecified():
-    #             num_cistrans += 1
 
     new_obmol.EndModify()
 
@@ -192,8 +173,12 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
     _bondstereo = {0: rdkit.Chem.rdchem.BondStereo.STEREONONE,
                    1: rdkit.Chem.rdchem.BondStereo.STEREOE,
                    2: rdkit.Chem.rdchem.BondStereo.STEREOZ}
+    _atomstereo = {1: rdkit.Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW,
+                   2: rdkit.Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW,
+                   3: rdkit.Chem.rdchem.ChiralType.CHI_UNSPECIFIED}
 
     _bondtypes_names = {0: "UNSPECIFIED", 1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 5: "AROMATIC"}
+    _implicit_h_ref = 4294967294
 
     rdmol = rdkit.Chem.Mol()
     rdedmol = rdkit.Chem.RWMol(rdmol)
@@ -208,23 +193,26 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.warning)
         residue_iter = None
 
+    ob_to_rw_atom_map = {}
+
     # Assigning atoms
     dummy_atoms = set()
     for index, each_atom in enumerate(pybel.ob.OBMolAtomIter(openbabel_obmol)):
+        is_dummy_atom = False
         if residue_iter is not None and residue_iter.GetAtomID(each_atom)[0:2].upper() in ['LP', 'XX'] \
                 and each_atom.GetAtomicMass() == 0:
-            dummy_atoms.add(index)
+            is_dummy_atom = True
             rdatom = rdkit.Chem.MolFromSmarts('*').GetAtomWithIdx(0)
             os_util.local_print('Atom {} was detected as a lone pair because of its name {} and its mass {}'
                                 ''.format(index, residue_iter.GetAtomID(each_atom), each_atom.GetAtomicMass()),
                                 current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
 
         elif residue_iter is None and each_atom.GetAtomicMass() == 0:
-            dummy_atoms.add(index)
+            is_dummy_atom = True
             rdatom = rdkit.Chem.MolFromSmarts('*').GetAtomWithIdx(0)
             os_util.local_print('Atom {} was detected as a lone pair because of its mass {} (Note: it was not possible '
                                 'to read atom name)'
-                                ''.format(index, residue_iter.GetAtomID(each_atom), each_atom.GetAtomicMass()),
+                                ''.format(index, each_atom.GetAtomicMass()),
                                 current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.info)
 
         else:
@@ -237,6 +225,11 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
         if each_atom.IsAromatic():
             rdedmol.GetAtomWithIdx(new_atom).SetIsAromatic(True)
 
+        ob_to_rw_atom_map[each_atom.GetId()] = new_atom
+        if is_dummy_atom:
+            dummy_atoms.add(new_atom)
+    rw_to_ob_atom_map = {v: k for k, v in ob_to_rw_atom_map.items()}
+
     if dummy_atoms:
         os_util.local_print('These are the dummy atoms detected: dummy_atoms={}'.format(dummy_atoms),
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
@@ -246,24 +239,127 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
 
     # Assigning bonds
     for each_bond in pybel.ob.OBMolBondIter(openbabel_obmol):
-        rdedmol.AddBond(each_bond.GetBeginAtomIdx() - 1, each_bond.GetEndAtomIdx() - 1,
+        rdedmol.AddBond(ob_to_rw_atom_map[each_bond.GetBeginAtom().GetId()],
+                        ob_to_rw_atom_map[each_bond.GetEndAtom().GetId()],
                         _bondtypes[each_bond.GetBondOrder()])
+        this_bond = rdedmol.GetBondBetweenAtoms(ob_to_rw_atom_map[each_bond.GetBeginAtom().GetId()],
+                                                ob_to_rw_atom_map[each_bond.GetEndAtom().GetId()])
         if each_bond.IsAromatic():
-            rdedmol.GetBondBetweenAtoms(each_bond.GetBeginAtomIdx() - 1,
-                                        each_bond.GetEndAtomIdx() - 1).SetIsAromatic(True)
-            rdedmol.GetBondBetweenAtoms(each_bond.GetBeginAtomIdx() - 1,
-                                        each_bond.GetEndAtomIdx() - 1).SetBondType(_bondtypes[5])
+            this_bond.SetIsAromatic(True)
+            this_bond.SetBondType(_bondtypes[5])
 
         # This bond contains a dummy atom, converting bond to a UNSPECIFIED
-        if dummy_atoms.intersection({each_bond.GetBeginAtomIdx() - 1, each_bond.GetEndAtomIdx() - 1}):
-            rdedmol.GetBondBetweenAtoms(each_bond.GetBeginAtomIdx() - 1,
-                                        each_bond.GetEndAtomIdx() - 1).SetBondType(_bondtypes[0])
+        if dummy_atoms.intersection({ob_to_rw_atom_map[each_bond.GetBeginAtom().GetId()],
+                                     ob_to_rw_atom_map[each_bond.GetEndAtom().GetId()]}):
+            this_bond.SetBondType(_bondtypes[0])
         os_util.local_print('Bond between atoms {} and {} converted to {} type'
-                            ''.format(each_bond.GetBeginAtomIdx() - 1, each_bond.GetEndAtomIdx() - 1,
+                            ''.format(ob_to_rw_atom_map[each_bond.GetBeginAtom().GetId()],
+                                      ob_to_rw_atom_map[each_bond.GetEndAtom().GetId()],
                                       _bondtypes_names[each_bond.GetBondOrder()]),
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
-    # FIXME: assign stereochemistry
+    stereofacade = pybel.ob.OBStereoFacade(openbabel_obmol)
+    for each_bond in pybel.ob.OBMolBondIter(openbabel_obmol):
+        this_bond = rdedmol.GetBondBetweenAtoms(ob_to_rw_atom_map[each_bond.GetBeginAtom().GetId()],
+                                                ob_to_rw_atom_map[each_bond.GetEndAtom().GetId()])
+        if stereofacade.HasCisTransStereo(each_bond.GetId()):
+            bond_info = stereofacade.GetCisTransStereo(each_bond.GetId())
+            bond_config = bond_info.GetConfig()
+            if not bond_info.IsSpecified():
+                os_util.local_print('Bond {} has cis/trans stereochemistry, but configuration is undefined. This '
+                                    'should not happen. I will try to guess the configuration from the 3D structure.',
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                continue
+            for (i, j) in itertools.combinations(bond_config.refs, r=2):
+                if not bond_info.IsOnSameAtom(i, j):
+                    rdkit.RDLogger.DisableLog('rdApp.*')
+                    try:
+                        this_bond.SetStereoAtoms(ob_to_rw_atom_map[openbabel_obmol.GetAtomById(i).GetId()],
+                                                 ob_to_rw_atom_map[openbabel_obmol.GetAtomById(j).GetId()])
+                    except RuntimeError:
+                        rdkit.RDLogger.EnableLog('rdApp.*')
+                        continue
+                    else:
+                        os_util.local_print('Stereochemistry of the bond between atoms {} and {} is defined by atoms '
+                                            '{} and {}.'
+                                            ''.format(this_bond.GetBeginAtom().GetIdx(),
+                                                      this_bond.GetEndAtom().GetIdx(),
+                                                      ob_to_rw_atom_map[openbabel_obmol.GetAtomById(i).GetId()],
+                                                      ob_to_rw_atom_map[openbabel_obmol.GetAtomById(j).GetId()]),
+                                            msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+                    rdkit.RDLogger.EnableLog('rdApp.*')
+                    this_bond.SetStereo(rdkit.Chem.rdchem.BondStereo.STEREOTRANS if bond_info.IsTrans(i, j)
+                                        else rdkit.Chem.rdchem.BondStereo.STEREOCIS)
+                    os_util.local_print('Setting bond between atoms {} and {} to be a {}.'
+                                        ''.format(this_bond.GetBeginAtom().GetIdx(), this_bond.GetEndAtom().GetIdx(),
+                                                  this_bond.GetStereo()),
+                                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+                    break
+            else:
+                os_util.local_print('Bond between atoms {} and {} is a double bond, but configuration is undefined. '
+                                    'This should not happen. I will try to guess the configuration from the 3D '
+                                    'structure, if possible.'
+                                    ''.format(bond_config.begin, bond_config.end),
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+    rdkit.Chem.AssignStereochemistry(rdedmol)
+
+    for each_atom in pybel.ob.OBMolAtomIter(openbabel_obmol):
+        if stereofacade.HasTetrahedralStereo(each_atom.GetId()):
+            if openbabel_obmol.Has3D():
+                os_util.local_print('Atom {} {} is a stereocenter. Because there are 3D coordinates, I will guess the '
+                                    'stereochemistry from it when converting OBMol to RDKit Mol.'
+                                    ''.format(pybel.Atom(each_atom).type, pybel.Atom(each_atom).idx),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+                continue
+
+            rdkit_atom = rdedmol.GetAtomWithIdx(ob_to_rw_atom_map[each_atom.GetId()])
+            tetstereo = stereofacade.GetTetrahedralStereo(each_atom.GetId())
+            if not tetstereo.GetConfig().specified:
+                os_util.local_print('Atom {} {} is a stereocenter, but configuration is undefined. Make sure that this '
+                                    'is what you want.'
+                                    ''.format(pybel.Atom(each_atom).type, pybel.Atom(each_atom).idx),
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+                rdkit_atom.SetChiralTag(_atomstereo[3])
+                continue
+
+            # This code tries to get the CW/ACW info using the same view RDKit uses to do so [1, 2]. This is done via
+            # the GetConfig [3, 4], then the sequence is tested to match the bond sequence in RDKit.
+            # References:
+            # [1] https://sourceforge.net/p/rdkit/mailman/message/36796561/
+            # [2] https://www.rdkit.org/docs/cppapi/classRDKit_1_1Atom.html
+            # [3] https://open-babel.readthedocs.io/en/latest/Stereochemistry/stereo.html
+            # [4] https://openbabel.org/dev-api/structOpenBabel_1_1OBTetrahedralStereo_1_1Config.shtml
+            bonded_atoms_data = {b.GetBeginAtomIdx() if b.GetBeginAtomIdx() != rdkit_atom.GetIdx()
+                                 else b.GetEndAtomIdx(): b.GetIdx() for b in rdkit_atom.GetBonds()}
+
+            bonded_atoms_by_bond = sorted(bonded_atoms_data, key=bonded_atoms_data.get)
+            first_bonded_atom = bonded_atoms_by_bond[0]
+            input_config = tetstereo.GetConfig(rw_to_ob_atom_map[first_bonded_atom], pybel.ob.OBStereo.Clockwise,
+                                               pybel.ob.OBStereo.ViewFrom)
+
+            # Now test whether the 2nd and 3rd bonds are in the CW sequence. First, get all the three possible sequences
+            # using RDKit ids.
+            atom_sequences = []
+            for i, j in [[0, 1], [1, 2], [2, 0]]:
+                try:
+                    atom_sequences.append([ob_to_rw_atom_map[input_config.refs[i]],
+                                           ob_to_rw_atom_map[input_config.refs[j]]])
+                except KeyError as error:
+                    if error.args[0] != _implicit_h_ref:
+                        raise error
+
+            # Now get the 2nd and 3rd atoms. Note that implicit Hs are assumed to be in the end of the bond list (see
+            # [2] above.
+            if [bonded_atoms_by_bond[1], bonded_atoms_by_bond[2]] in atom_sequences:
+                # This is means that RDKit would assign CW to this center
+                this_stereo = _atomstereo[pybel.ob.OBStereo.Clockwise]
+            else:
+                this_stereo = _atomstereo[pybel.ob.OBStereo.AntiClockwise]
+
+            rdkit_atom.SetChiralTag(this_stereo)
+            os_util.local_print('Setting stereocenter in atom {} {} to {}'
+                                ''.format(pybel.Atom(each_atom).type, pybel.Atom(each_atom).idx, this_stereo),
+                                msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     rdmol = rdedmol.GetMol()
     # Fix the formal charge of N. From Greg Landrum's Gist at
@@ -298,12 +394,13 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
         raise ValueError
 
-    for atom_rdkit, atom_obmol in zip(rdmol.GetAtoms(), pybel.ob.OBMolAtomIter(openbabel_obmol)):
+    for atom_obmol in pybel.ob.OBMolAtomIter(openbabel_obmol):
+        atom_rdkit = ob_to_rw_atom_map[atom_obmol.GetId()]
         this_position = rdkit.Geometry.rdGeometry.Point3D()
         this_position.x = atom_obmol.x()
         this_position.y = atom_obmol.y()
         this_position.z = atom_obmol.z()
-        rdmol.GetConformer().SetAtomPosition(atom_rdkit.GetIdx(), this_position)
+        rdmol.GetConformer().SetAtomPosition(atom_rdkit, this_position)
 
     # Copy data
     [rdmol.SetProp(k, v) for k, v in pybel.MoleculeData(openbabel_obmol).items()]
@@ -314,7 +411,11 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
             continue
         import numpy
         dist_list = numpy.argsort(numpy.array(rdkit.Chem.AllChem.Get3DDistanceMatrix(rdmol)[each_atom.GetIdx()]))
-        closer_atom = int(dist_list[1])
+        try:
+            closer_atom = int(dist_list[1])
+        except IndexError:
+            # Is this a lone atom?
+            continue
         rdedmol = rdkit.Chem.RWMol(rdmol)
         rdedmol.AddBond(each_atom.GetIdx(), closer_atom)
         rdmol = rdedmol.GetMol()
@@ -325,10 +426,13 @@ def obmol_to_rwmol(openbabel_obmol, verbosity=0):
                             current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.warning)
 
     rdkit.Chem.SanitizeMol(rdmol)
+    rdkit.Chem.AssignStereochemistry(rdmol)
 
     os_util.local_print("obmol_to_rwmol converted molecule {} (name: {}). Pybel SMILES: {} to rdkit SMILES: {}"
-                        "".format(openbabel_obmol, openbabel_obmol.GetTitle(),
-                                  pybel.Molecule(openbabel_obmol).write('smi'), rdkit.Chem.MolToSmiles(rdedmol)),
+                        "".format(openbabel_obmol,
+                                  openbabel_obmol.GetTitle() if openbabel_obmol.GetTitle() else '<<UNNAMED>>',
+                                  pybel.Molecule(openbabel_obmol).write('smi').replace('\n', ''),
+                                  rdkit.Chem.MolToSmiles(rdmol)),
                         current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.debug)
 
     return rdmol
@@ -1047,8 +1151,8 @@ def parameterize_small_molecule(input_molecule, param_type='acpype', executable=
     return return_data
 
 
-def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.5, die_on_error=True, no_checks=False,
-                                   verbosity=0):
+def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.5, die_on_error=True, use_model=0,
+                                   no_checks=False, verbosity=0):
     """ Reads PDBQT for a small ligand (ie, it will fail for macromolecules) using meeko, rdkit and openbabel.
 
     Parameters
@@ -1062,6 +1166,8 @@ def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.
         total charge is an integer, a large value here should be safe.
     die_on_error : bool
         Raise an error when molecule cannot be processed. If False, False will be returned instead.
+    use_model : int
+
     no_checks : bool
         Ignore checks and keep going
     verbosity : int
@@ -1089,7 +1195,8 @@ def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.
             mol_text = os_util.read_file_to_buffer(ligand_file, return_as_list=True)
             smiles_line = os_util.inner_search(needle='SMILES', haystack=mol_text,
                                                apply_filter=lambda s: not s.startswith('REMARK'))
-            smiles = mol_text[smiles_line].split()[-1]
+            if smiles_line is not False:
+                smiles = mol_text[smiles_line].split()[-1]
 
         if smiles is not False:
             temp_pdb = PDBFile(ligand_file)
@@ -1127,9 +1234,44 @@ def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.
                                                 current_verbosity=verbosity)
                             return False
 
-                temp_pdb_data = temp_pdb.models[0].__str__()
+                try:
+                    temp_pdb_data = temp_pdb.models[use_model].__str__()
+                except KeyError:
+                    if no_checks:
+                        os_util.local_print('Model {} not found in file {}. {} models/poses read. Make sure to select '
+                                            'the correct pose for this molecule. Because you are running with '
+                                            'no_checks, I will keep going.'
+                                            ''.format(use_model + 1, ligand_file, len(temp_pdb.models)),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        return False
+                    else:
+                        os_util.local_print('Model {} not found in file {}. {} models/poses read. Make sure to select '
+                                            'the correct pose for this molecule.'
+                                            ''.format(use_model + 1, ligand_file, len(temp_pdb.models)),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        raise SystemExit(1)
+
             else:
-                temp_pdb_data = temp_pdb.to_file()
+                if use_model != 0:
+                    if no_checks:
+                        os_util.local_print('Model {} not found in file {}. Only a single model/pose read. Make sure '
+                                            'to select the correct pose for this molecule. Because you are running '
+                                            'with no_checks, I will keep going.'
+                                            ''.format(use_model + 1, ligand_file),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        return False
+                    else:
+                        os_util.local_print('Model {} not found in file {}. Only a single model/pose read. Make sure '
+                                            'to select the correct pose for this molecule.'
+                                            ''.format(use_model + 1, ligand_file),
+                                            msg_verbosity=os_util.verbosity_level.error,
+                                            current_verbosity=verbosity)
+                        raise SystemExit(1)
+                else:
+                    temp_pdb_data = temp_pdb.to_file()
 
             try:
                 from openbabel import pybel
@@ -1200,9 +1342,9 @@ def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.
                                             current_verbosity=verbosity)
                         return False
 
-            this_mol_name = temp_mol[0].title
-            this_tot_charge = sum([i.partialcharge for i in temp_mol[0].atoms])
-            temp_mol = pybel.readstring('pdb', temp_mol[0].write('pdb', opt={'n': True}))
+            this_mol_name = temp_mol[use_model].title
+            this_tot_charge = sum([i.partialcharge for i in temp_mol[use_model].atoms])
+            temp_mol = pybel.readstring('pdb', temp_mol[use_model].write('pdb', opt={'n': True}))
             # Only non-polar Hs are added because polar Hs should be present in the input PDBQT and
             # adding all hydrogens could change the ligand protonation state.
             temp_mol.OBMol.AddNonPolarHydrogens()
@@ -1248,9 +1390,11 @@ def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.
                                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                         return False
             temp_mol.SetProp('_Name', this_mol_name)
+            rdkit.Chem.AssignStereochemistryFrom3D(temp_mol, replaceExistingTags=False)
             return temp_mol
 
 
+@os_util.trace
 def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, verbosity=0):
     """ Reads a molecule from a PDB file or block using RDKit, falling back to OpenBabel
 
@@ -1293,6 +1437,7 @@ def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, ve
             mol_text = os_util.read_file_to_buffer(ligand_data, return_as_list=True, verbosity=verbosity)
     else:
         ob_molecule = ligand_data
+        mol_text = ob_molecule.write('pdb')
 
     # If assign BO from a SMILES fails, we will fall back to OpenBabel. Save a copy of the original ob_molecule
     original_ob_molecule = pybel.Molecule(ob_molecule)
@@ -1361,7 +1506,8 @@ def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, ve
             for (a1, a2) in numpy.dstack(numpy.unravel_index(numpy.argsort(dist_mat.ravel()),
                                                              dist_mat.shape))[0]:
                 if topol_dist_mat[a1, a2] > 999:
-                    if tmp_mol.GetAtomWithIdx(int(a1)).GetAtomicNum() == 1 or tmp_mol.GetAtomWithIdx(int(a2)).GetAtomicNum() == 1:
+                    if tmp_mol.GetAtomWithIdx(int(a1)).GetAtomicNum() == 1 or tmp_mol.GetAtomWithIdx(
+                            int(a2)).GetAtomicNum() == 1:
                         continue
                     # Atoms belong to different fragments. Add a bond between them, then update topol_dist_mat
                     tmp_mol = rdkit.Chem.RWMol(tmp_mol)
@@ -1422,6 +1568,7 @@ def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, ve
             rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
         return False
     else:
+        rdkit.Chem.AllChem.AssignStereochemistryFrom3D(read_mol, replaceExistingTags=False)
         return converted_mol
 
 
