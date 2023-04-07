@@ -540,6 +540,14 @@ def trace(f):
                                       f'SMILES={rdkit.Chem.MolToSmiles(each_arg)})>')
             except (AttributeError, KeyError):
                 formatted_args.append(each_arg)
+        formatted_args_kwargs = {}
+        for each_key, each_arg in kwargs.items():
+            try:
+                formatted_args_kwargs[each_key] = f'<rdkit.Chem.rdchem.Mol object at {hex(id(each_arg))} ' \
+                                                  f'(Name="{each_arg.GetProp("_Name")}"; ' \
+                                                  f'SMILES={rdkit.Chem.MolToSmiles(each_arg)})>'
+            except (AttributeError, KeyError):
+                formatted_args_kwargs[each_key] = each_arg
         local_print("Entering {} with: {} {}".format(_get_scope(f, args), formatted_args, kwargs),
                     msg_verbosity=verbosity_level.debug, current_verbosity=kwargs.get('verbosity', 1))
         return f(*args, **kwargs)

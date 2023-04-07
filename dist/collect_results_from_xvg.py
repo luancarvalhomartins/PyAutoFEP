@@ -80,10 +80,11 @@ def process_xvg_to_dict(input_files, temperature=298.15):
                     converted_table[index_coord * time_count + index_time][1] = index_coord
                     converted_table[index_coord * time_count + index_time][index_struct + 2] = \
                         time_potential[1] + pv_table[index_struct][time_potential[0]]
-                except IndexError as error:
+                except (IndexError, KeyError) as error:
                     print('[ERROR] index_coord: {}; time_count: {}; index_time: {}; index: {}'
                           ''.format(index_coord, time_count, index_time, str(index_coord * time_count + index_time)))
                     print('[ERROR] Error message is: {}'.format(error))
+                    print('[ERROR] Make sure all your FEP run to completion and that the time steps are consistent.')
 
     # Prepare indexes and column names
     indexes = ['time', 'fep-lambda']

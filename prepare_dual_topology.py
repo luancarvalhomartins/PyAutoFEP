@@ -1137,7 +1137,7 @@ def parse_input_molecules(input_data, verbosity=0):
                     this_data = list(csv.DictReader(fh, delimiter=delimiter))
 
                 # Guess the column name. Note the dumb nested loop to get the correct case.
-                name_columns = ['Name', 'Molecule', 'MolName', 'Compound', 'Cmpd', 'Mol', 'Names']
+                name_columns = ['Name', 'Names', 'Molecule', 'MolName', 'Compound', 'Cmpd', 'Mol']
                 key_name = False
                 key_smiles = False
                 for k in name_columns:
