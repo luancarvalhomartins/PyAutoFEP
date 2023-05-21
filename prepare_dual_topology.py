@@ -385,13 +385,18 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     position = os_util.inner_search(re.compile(r'#include\s+\".*forcefield\.itp\"', flags=re.IGNORECASE).match,
                                     system_topology_list, apply_filter=';')
     if position is False:
-        new_file_name = os.path.basename(build_files_dict['protein_top'])
-        shutil.copy2(build_files_dict['protein_top'], new_file_name)
-        os_util.local_print('Failed to find a forcefield.itp import in topology file {}. This suggests a problem in '
-                            'topology file formatting. Please, check inputs, especially force field. Copying {} to {}.'
-                            ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'], new_file_name),
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise SystemExit(1)
+        position = os_util.inner_search(re.compile(r'\s*\[\s+defaults\s+]', flags=re.IGNORECASE).match,
+                                        system_topology_list, apply_filter=';')
+        if position is False:
+            new_file_name = os.path.basename(build_files_dict['protein_top'])
+            shutil.copy2(build_files_dict['protein_top'], new_file_name)
+            os_util.local_print('Failed to find a forcefield.itp import or a [ defaults ] in topology file {}. This '
+                                'suggests a problem in topology file formatting. Please, check inputs, especially '
+                                'force field. Copying {} to {}.'
+                                ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
+                                          new_file_name),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
     [system_topology_list.insert(position + 2, each_line) for each_line in ligatoms_list]
 
     fn_match = re.compile(r'\s*\[\s+system\s+]', flags=re.IGNORECASE).match
@@ -2439,11 +2444,14 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
         position = os_util.inner_search(re.compile(r'#include\s+\".*forcefield\.itp\"').match,
                                         topology_data, apply_filter=';')
         if position is False:
-            os_util.local_print('Failed to find a forcefield.itp import in topology file {}. This suggests a problem '
-                                'in topology file formatting. Please, check inputs, especially force field.'
-                                ''.format(input_topology),
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
+            position = os_util.inner_search(re.compile(r'\s*\[\s+defaults\s+]', flags=re.IGNORECASE).match,
+                                            topology_data, apply_filter=';')
+            if position is False:
+                os_util.local_print('Failed to find a forcefield.itp import or a [ deafults ] in topology file {}. '
+                                    'This suggests a problem in topology file formatting. Please, check inputs, '
+                                    'especially force field.'.format(input_topology),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
         [topology_data.insert(position + 2, each_line) for each_line in ligatoms_list]
 
     fn_match_lig = re.compile(r'#include\s+\"ligand\.itp\"', flags=re.IGNORECASE).match

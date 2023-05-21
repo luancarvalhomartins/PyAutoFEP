@@ -22,12 +22,12 @@
 #
 import os
 import re
-import subprocess
 from copy import deepcopy
 import time
 from collections.abc import Callable
 import itertools
 
+from rdkit import RDLogger
 import rdkit.Chem
 import rdkit.Chem.rdFMCS
 import rdkit.Chem.rdForceFieldHelpers
@@ -42,24 +42,39 @@ import os_util
 import savestate_util
 
 
+@os_util.trace
 def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None, num_conformations=1, randomseed=2342,
                                  restraint_steps=(10.0, 50.0, 100.0), minimization_steps=5,
                                  force_field=rdkit.Chem.AllChem.UFFGetMoleculeForceField, verbosity=0, **kwargs):
     """ Use force field minimization to constrain molecule to core, without Embed code
 
-    :param rdkit.Chem.Mol molecule: mobile molecule to be embed
-    :param rdkit.Chem.Mol core: reference molecule
-    :param int core_conf_id: use this core conformation
-    :param list atom_map: use this atoms to map molecule -> core atoms, default get match automatically
-    :param int num_conformations: generate this many conformations
-    :param int randomseed: random seed to the conformer generator
-    :param list restraint_steps: apply restraints sequentially from this list, default (10.0, 50.0, 100.0)
-    :param int minimization_steps: run this much minimization steps
-    :param function force_field: get force field function, default UFF
-    :param int verbosity: set verbosity
-    :rtype: rdkit.Chem.Mol
-    """
+    Parameters
+    ----------
+    molecule : rdkit.Chem.Mol
+        Mobile molecule to be embed
+    core : rdkit.Chem.Mol
+        Reference molecule
+    core_conf_id : int
+        Use this core conformation
+    atom_map : list
+        Use this atoms to map molecule -> core atoms, default get match automatically
+    num_conformations : int
+        Generate this many conformations
+    randomseed : int
+        Random seed to the conformer generator
+    restraint_steps : list
+        Apply restraints sequentially from this list, default (10.0, 50.0, 100.0)
+    minimization_steps : int
+        Run this much minimization steps
+    force_field : function
+        Get force field function, default UFF
+    verbosity : int
+        Set verbosity level
 
+    Returns
+    -------
+    list
+    """
     default_values = {'randomSeed': randomseed, 'ignoreSmoothingFailures': True, 'enforceChirality': True,
                       'maxAttempts': 50, 'boxSizeMult': 5.0, 'randNegEig': True, 'numZeroFail': 1, 'forceTol': 1.0e-3,
                       'energyTol': 1.0e-4, 'useExpTorsionAnglePrefs': True, 'useBasicKnowledge': True, 'maxIters': 50,
@@ -208,7 +223,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
     default_values = {'maxAttempts': 50, 'numConfs': num_conformers, 'randomSeed': randomseed, 'useRandomCoords': True,
                       'clearConfs': True, 'ignoreSmoothingFailures': True, 'useExpTorsionAnglePrefs': True,
                       'enforceChirality': True, 'boxSizeMult': 5.0, 'numThreads': num_threads, 'gridSpacing': 0.5,
-                      'vdwScale': 0.8, 'stepSize': 0.25, 'maxLayers': -1, 'ignoreHs': True}
+                      'vdwScale': 0.8, 'stepSize': 0.25, 'maxLayers': -1, 'ignoreHs': True, 'maxMatches': 32}
     [kwargs.setdefault(key, value) for key, value in default_values.items()]
 
     if kwargs['clearConfs']:
@@ -236,7 +251,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                 # 3D MCS requires hydrogens, so keep Hs here and remove them below
                 this_mcs = find_mcs_3d(molecule_a=molecule, molecule_b=target,
                                        num_threads=kwargs.get('num_threads', 0), verbosity=verbosity,
-                                       savestate=save_state).smartsString
+                                       savestate=save_state, maxMatches=kwargs['maxMatches']).smartsString
                 os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
                                     ''.format(molecule.GetProp('_Name'), target.GetProp('_Name'),
                                               this_mcs),
@@ -288,8 +303,8 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                          min_atom_map=atom_map, verbosity=verbosity)
             tmp_kwargs = kwargs.copy()
             tmp_kwargs['enforceChirality'] = True
-            constrained_embed_forcefield(molecule, target, core_conf_id=core_conf_id, randomseed=randomseed,
-                                         atom_map=this_atom_map, num_conformations=1, **tmp_kwargs)
+            constrained_embed_forcefield(molecule, core=target, core_conf_id=core_conf_id, randomseed=randomseed,
+                                         atom_map=this_atom_map, num_conformations=1, verbosity=verbosity, **tmp_kwargs)
             return molecule
 
         temp_core_structure = mol_util.loose_replace_side_chains(target, core_mol, use_chirality=True)
@@ -344,6 +359,10 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
             matches = get_atom_map(molecule_a=molecule, molecule_b=target, core_mol=core_mol, multiple_matches=True,
                                    verbosity=verbosity)
 
+        os_util.local_print('There are {} possible matches between the target and molecule "{}" (SMILE={}). Starting '
+                            ''.format(len(matches), molecule.GetProp("_Name"), rdkit.Chem.MolToSmiles(molecule)),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
         for match in matches:
             if len(match) + rigid_molecule_threshold >= molecule.GetNumHeavyAtoms():
                 # If there are too few atoms to be sampled, just generate a single conformation. This will often be
@@ -380,7 +399,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                 os_util.local_print('EmbedMultipleConfs failed to generate conformations. Retrying with force field '
                                     'optimization-based constrained embed.',
                                     msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
-                constrained_embed_forcefield(molecule, core_mol, core_conf_id=core_conf_id, randomseed=randomseed,
+                constrained_embed_forcefield(molecule, core=core_mol, core_conf_id=core_conf_id, randomseed=randomseed,
                                              atom_map=atom_map, **kwargs)
         if molecule.GetNumConformers() == 0:
             os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue. A possible reason '
@@ -411,16 +430,33 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
         else:
             num_conformers = kwargs['numConfs']
 
-        rdkit.Chem.AllChem.EmbedMultipleConfs(molecule, maxAttempts=kwargs['maxAttempts'], numConfs=num_conformers,
-                                              randomSeed=kwargs['randomSeed'],
-                                              useRandomCoords=kwargs['useRandomCoords'],
-                                              clearConfs=kwargs['clearConfs'], coordMap=coord_map,
-                                              ignoreSmoothingFailures=kwargs['ignoreSmoothingFailures'],
-                                              useExpTorsionAnglePrefs=kwargs['useExpTorsionAnglePrefs'],
-                                              enforceChirality=kwargs['enforceChirality'],
-                                              boxSizeMult=kwargs['boxSizeMult'], numThreads=kwargs['numThreads'])
+        try:
+            new_confs = rdkit.Chem.AllChem.EmbedMultipleConfs(molecule, maxAttempts=kwargs['maxAttempts'],
+                                                              numConfs=num_conformers,
+                                                              randomSeed=kwargs['randomSeed'],
+                                                              useRandomCoords=kwargs['useRandomCoords'],
+                                                              clearConfs=kwargs['clearConfs'], coordMap=coord_map,
+                                                              ignoreSmoothingFailures=kwargs['ignoreSmoothingFailures'],
+                                                              useExpTorsionAnglePrefs=kwargs['useExpTorsionAnglePrefs'],
+                                                              enforceChirality=kwargs['enforceChirality'],
+                                                              boxSizeMult=kwargs['boxSizeMult'],
+                                                              numThreads=kwargs['numThreads'])
+        except RuntimeError:
+            new_confs = []
+
+        if len(list(new_confs)) == 0:
+            os_util.local_print('Failed to generate conformations to molecule {} using EmbedMultipleConfs. Falling '
+                                'back to constrained_embed_forcefield. This may take a while.'
+                                ''.format(molecule.GetProp("_Name")),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+            if matching_atoms:
+                atom_map = [(ai, aj) for ai, aj in matching_atoms.items()]
+            constrained_embed_forcefield(molecule, core=target, atom_map=atom_map, num_conformations=num_conformers,
+                                         randomseed=randomseed, verbosity=verbosity, **kwargs)
 
     if molecule.GetNumConformers() == 0:
+        rdkit.Chem.AssignStereochemistry(molecule)
+        chiral_data_mol = rdkit.Chem.FindMolChiralCenters(molecule)
         os_util.local_print('Failed to generate conformations to molecule {}. Cannot continue. A possible reason '
                             'for this error is that you are trying to invert a stereocenter, but mcs_type is '
                             'graph instead of 3d (mcs_type={}, chiral_data_mol={}).'
@@ -486,7 +522,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
 @os_util.trace
 def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol_conf_id=-1, randomseed=2342,
                               num_conformers=50, volume_function='tanimoto', rigid_molecule_threshold=1,
-                              num_threads=0, mcs=None, mcs_type='graph', savestate=None, verbosity=0):
+                              num_threads=0, mcs=None, mcs_type='graph', max_matches=32, savestate=None, verbosity=0):
     """ Generates an embedding of a dual-topology pseudomolecule to target using MCS,
 
     :param all_classes.MergedTopologies pseudomolecule: pseudomolecule to be embed
@@ -500,6 +536,8 @@ def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol
                                          constrained (-1: off)
     :param int num_threads: use this many threads during conformer generation (0: max supported)
     :param str mcs: use this SMARTS as common core to merge molecules
+    :param str mcs_type: use this type of MCS to detect the common core
+    :param str max_matches: if mcs_type=3d, limit the number of matches to this number
     :param savestate_util.SavableState savestate: saved state data
     :param int verbosity: set verbosity level
     :rtype: all_classes.MergedTopologies
@@ -510,22 +548,23 @@ def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol
 
     # Prepare a temporary copy of molecules A and B, but remove original conformers to make sure we don't get one
     # of them in the rms_dict
+    RDLogger.DisableLog('rdApp.*')
     temp_mol_a = rdkit.Chem.Mol(pseudomolecule.molecule_a)
     temp_mol_b = rdkit.Chem.Mol(pseudomolecule.molecule_b)
 
     temp_mol_a = constrained_embed_shapeselect(temp_mol_a, target, core_conf_id=core_conf_id, randomseed=randomseed,
                                                num_conformers=num_conformers, volume_function=volume_function,
                                                rigid_molecule_threshold=rigid_molecule_threshold,
-                                               num_threads=num_threads, mcs=mcs, save_state=savestate,
-                                               verbosity=verbosity, mcs_type=mcs_type)
+                                               num_threads=num_threads, mcs=mcs, maxMatches=max_matches,
+                                               save_state=savestate, verbosity=verbosity, mcs_type=mcs_type)
     coord_map = {j: temp_mol_a.GetConformer().GetAtomPosition(i) for i, j in pseudomolecule.atom_map}
 
     temp_mol_b = constrained_embed_shapeselect(temp_mol_b, target, core_conf_id=core_conf_id, coord_map=coord_map,
                                                randomseed=randomseed, num_conformers=num_conformers,
                                                volume_function=volume_function,
                                                rigid_molecule_threshold=rigid_molecule_threshold,
-                                               num_threads=num_threads, mcs=mcs, save_state=savestate,
-                                               verbosity=verbosity, mcs_type=mcs_type)
+                                               num_threads=num_threads, mcs=mcs, maxMatches=max_matches,
+                                               save_state=savestate, verbosity=verbosity, mcs_type=mcs_type)
 
     # Copy coordinates of the best conformers to pseudomolecule's molecules A and B
     pseudomolecule.molecule_a.RemoveAllConformers()
@@ -559,7 +598,8 @@ def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol
                                     current_verbosity=verbosity)
             elif mcs_type == '3d':
                 this_mcs = find_mcs_3d(molecule_a=new_each_endpoint_molecule, molecule_b=target,
-                                       num_threads=num_threads, verbosity=verbosity, savestate=savestate).smartsString
+                                       num_threads=num_threads, maxMatches=max_matches, verbosity=verbosity,
+                                       savestate=savestate).smartsString
                 os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
                                     ''.format(new_each_endpoint_molecule.GetProp('_Name'), target.GetProp('_Name'),
                                               this_mcs),
@@ -675,6 +715,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
 
     """
 
+    # TODO: set default kwargs here
     molecule1 = mol_util.process_dummy_atoms(molecule_a, verbosity=verbosity)
     molecule2 = mol_util.process_dummy_atoms(molecule_b, verbosity=verbosity)
 
@@ -773,8 +814,9 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                                 msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
         elif kwargs.get('mcs_type', 'graph') == '3d':
             common_core_smiles = find_mcs_3d(molecule_a=molecule1, molecule_b=molecule2,
-                                             num_threads=kwargs.get('num_threads', 0), verbosity=verbosity,
-                                             savestate=savestate).smartsString
+                                             num_threads=kwargs.get('num_threads', 0),
+                                             maxMatches=kwargs.get('maxMatches', 32),
+                                             verbosity=verbosity, savestate=savestate).smartsString
             os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
                                 ''.format(molecule1.GetProp('_Name'), molecule2.GetProp('_Name'), common_core_smiles),
                                 msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
@@ -1047,7 +1089,7 @@ def merge_topologies(molecule_a, molecule_b, file_topology1, file_topology2, no_
                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
         from numpy.random import randint
-        constrained_embed_forcefield(molecule2_embed, core_structure, ignoreSmoothingFailures=True,
+        constrained_embed_forcefield(molecule2_embed, core=core_structure, ignoreSmoothingFailures=True,
                                      randomseed=randint(9999999), useRandomCoords=True, maxAttempts=50,
                                      enforceChirality=True, **kwargs)
     finally:
@@ -1513,6 +1555,7 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
     kwargs.setdefault('boxSizeMult', 2.0)
     kwargs.setdefault('pruneRmsThresh', -1.0)
     kwargs.setdefault('maxAttempts', 100)
+    kwargs.setdefault('maxMatches', 32)
 
     for each_mol in [molecule_a, molecule_b]:
         if mol_util.num_implicit_hydrogens(each_mol) > 0:
@@ -1551,9 +1594,11 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
     achiral_mcs_mol = rdkit.Chem.MolFromSmarts(achiral_mcs.smartsString)
 
     achiral_matches_a = get_substruct_matches_fallback(reference_mol=molecule_a, core_mol=achiral_mcs_mol,
-                                                       uniquify=False, verbosity=verbosity)
+                                                       uniquify=False, maxMatches=kwargs['maxMatches'],
+                                                       verbosity=verbosity)
     achiral_matches_b = get_substruct_matches_fallback(reference_mol=molecule_b, core_mol=achiral_mcs_mol,
-                                                       uniquify=False, verbosity=verbosity)
+                                                       uniquify=False, maxMatches=kwargs['maxMatches'],
+                                                       verbosity=verbosity)
 
     mcs = find_mcs([molecule_a, molecule_b], savestate=None, matchChiralTag=True, verbosity=verbosity)
     os_util.local_print('First chiral MCS: {}'.format(mcs.smartsString),
@@ -1622,7 +1667,7 @@ def find_mcs_3d(molecule_a, molecule_b, tolerance=0.5, num_conformers=50, max_nu
                                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
             if len(confs) == 0:
-                confs = constrained_embed_forcefield(molecule_b, molecule_a,
+                confs = constrained_embed_forcefield(molecule_b, core=molecule_a,
                                                      atom_map=[[aj, ai] for ai, aj in match.items()],
                                                      maxAttempts=kwargs['maxAttempts'],
                                                      num_conformations=num_conformers, randomseed=randomseed,
@@ -1749,7 +1794,7 @@ def get_substruct_matches_fallback(reference_mol, core_mol, die_on_error=True, v
         Atom map between reference_mol and core_mol
     """
 
-    default_values = {'uniquify': True, 'useChirality': False, 'useQueryQueryMatches': False, 'maxMatches': 1000}
+    default_values = {'uniquify': True, 'useChirality': False, 'useQueryQueryMatches': False, 'maxMatches': 32}
     [kwargs.setdefault(key, value) for key, value in default_values.items()]
 
     # Prepare a mol representing the MCS and matches it to one of the mols in altered_mol_list (the first one)

@@ -92,10 +92,6 @@ def read_file_to_buffer(filename, die_on_error=False, return_as_list=False, erro
         die_on_error is False and the file cannot be read, False will be returned.
     """
 
-    local_print('Entering read_file_to_buffer(filename={}, die_on_error={}, return_as_list={})'
-                ''.format(filename, die_on_error, return_as_list),
-                msg_verbosity=verbosity_level.debug, current_verbosity=verbosity)
-
     try:
         with open(filename, 'r') as input_file:
             if return_as_list:
