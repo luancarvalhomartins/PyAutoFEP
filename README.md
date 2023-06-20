@@ -8,6 +8,13 @@ Furthermore, it aims to be as flexible as possible, giving the user great contro
 provided, so that PyAutoFEP can be used by non experts. PyAutoFEP is written in Python3 and uses GROMACS.
 
 ## Announcements
+**Commit _SHA1 TBD_ (20.06.2023)**<br/>
+This commit sets a new default value: `output_collecttype=python`. Previously,the default collect script was a binary 
+created using PyInstaller. This was done because back in 2020 not every cluster had a modern enough Python3 version, so
+this could save users some time in setting up an env just for a simple script. Nowadays Python3 is everywhere and 
+keeping the old binary as default makes no sense. Note that `output_collecttype=bin` is still allowed, but I expect to 
+drop support in the upcoming updates.
+
 **Commit f20b3c0 (11.01.2023)**<br/>
 This commit changes the poses reading. Before it, `prepare_dual_topology.py` would read poses for every molecule in the 
 input molecules, although only the poses for which the A states are needed would ever be used. Now, only the poses 

@@ -3444,7 +3444,7 @@ if __name__ == '__main__':
                          help='Use this local Gromacs binary to prepare the system (Default: gmx)')
     gmx_opt.add_argument('--gmx_bin_run', type=str, default=None,
                          help='Use this Gromacs binary to run the MD. This should be the Gromacs bin in the run node,'
-                              'not in the current machine. (Default: gmx_mpi)')
+                              'not in the current machine. This binary MUST be MPI-enabled. (Default: gmx_mpi)')
 
     mcs_opt = Parser.add_argument_group('MCS options', 'Options to control MCS, alignment, and superposition between '
                                                        'molecules')
@@ -3647,6 +3647,21 @@ if __name__ == '__main__':
                                 ''.format(each_arg, each_arg), msg_verbosity=os_util.verbosity_level.error,
                                 current_verbosity=arguments.verbose)
             raise SystemExit(1)
+
+    if not arguments.gmx_bin_run.endswith('_mpi'):
+        if not arguments.no_checks:
+            os_util.local_print('Your gmx_bin_run does not seem to be a MPI-enabled GROMACS binary (i.e., it does not '
+                                'end with _mpi). An MPI-enabled GROMACS binary is required for FEP run. Therefore, I '
+                                'will not go on. Your arguments.gmx_bin_run is "{}".'
+                                ''.format(arguments.arguments.gmx_bin_run),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+            raise ValueError
+        else:
+            os_util.local_print('Your gmx_bin_run does not seem to be a MPI-enabled GROMACS binary (i.e., it does not '
+                                'end with _mpi). An MPI-enabled GROMACS binary is required for FEP run. Because you '
+                                'are running with no_checks, I will go on. Your arguments.gmx_bin_run is "{}".'
+                                ''.format(arguments.arguments.gmx_bin_run),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
 
     arguments.mcs_custom_atommap = os_util.detect_type(arguments.mcs_custom_atommap, test_for_dict=True)
     if arguments.mcs_custom_atommap is not None and not isinstance(arguments.mcs_custom_atommap, dict):

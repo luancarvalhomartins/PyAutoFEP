@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 #
 #  collect_results_from_xvg.py
 #
@@ -175,7 +175,7 @@ if __name__ == '__main__':
     Parser.add_argument('-i', '--input', required=True, type=str, nargs='+',
                         help='Energy files (.edr) or data files (.xvg)')
     Parser.add_argument('--gmx_bin', default='gmx', type=str,
-                        help='Use this Gromacs executable. (Default: gmx)')
+                        help='Use this GROMACS executable. (Default: gmx)')
     Parser.add_argument('--output', default='unk_matrix.pkl', type=str,
                         help='Output data file (pkl). (Default: unk_matrix.pkl)')
     Parser.add_argument('--temperature', default=298.15, type=float,
