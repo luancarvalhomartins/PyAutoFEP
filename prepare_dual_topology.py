@@ -3278,7 +3278,9 @@ def align_ligands(receptor_structure, poses_input=None, poses_reference_structur
                 del poses_input[each_ligand]
         if set(poses_input) != set(ligands_to_read):
             os_util.local_print('Not all ligands in the perturbation map as starting points of FEP are in the pose '
-                                'input. Cannot go on. Please, see the manual.',
+                                'input. Cannot go on. Please, see the manual. The pose input is the following: '
+                                '{}. The ligands I need to read are: {}.'
+                                ''.format(poses_input_temp, ligands_to_read),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
 

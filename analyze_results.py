@@ -1142,7 +1142,7 @@ def ddg_to_center_ddg(ddg_graph, center, method='shortest', ddg_key='final_ddg',
 
 
 def collect_from_xvg(xvg_directory, unk_file='unk_matrix.pkl', temperature=None, verbosity=0):
-    """ Process a list of xvg/edr files in xvg_directory and save as a u_nk pandas.Dataframe to unk_file
+    """ Process a list of xvg/edr files in xvg_directory and save as an u_nk pandas.Dataframe to unk_file
 
     :param str xvg_directory: directory containing xvg files
     :param str unk_file: save data to this file

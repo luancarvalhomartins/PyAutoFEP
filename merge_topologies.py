@@ -94,7 +94,7 @@ def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None,
         if not atom_map:
             os_util.local_print('Failed to match molecule {} to core {} in constrained_embed_forcefield. Cannot '
                                 'continue'.format(rdkit.Chem.MolToSmiles(molecule),
-                                                  rdkit.Chem.MolToSmiles(adjusted_core)),
+                                                  rdkit.Chem.MolToSmarts(adjusted_core)),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise ValueError("Molecule doesn't match the core")
 
@@ -451,7 +451,97 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
                                 msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
             if matching_atoms:
                 atom_map = [(ai, aj) for ai, aj in matching_atoms.items()]
-            constrained_embed_forcefield(molecule, core=target, atom_map=atom_map, num_conformations=num_conformers,
+
+            # TODO: move this code to a function (eg, very similar to code in line merge_topologies.py:237)
+            try:
+                target.GetProp('_Name')
+            except KeyError:
+                target.SetProp('_Name', '<< Unnamed molecule SMILES={} >>'.format(rdkit.Chem.MolToSmiles(target)))
+
+            if kwargs.get('mcs_type', 'graph') == 'graph':
+                # completeRingsOnly and matchValences are required to prepare a dual topology
+                this_mcs = find_mcs([rdkit.Chem.RemoveHs(molecule), rdkit.Chem.RemoveHs(target)],
+                                    matchValences=True,
+                                    ringMatchesRingOnly=True, completeRingsOnly=True, verbosity=verbosity,
+                                    savestate=save_state, **kwargs).smartsString
+                os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs and is {}'
+                                    ''.format(molecule.GetProp('_Name'), target.GetProp('_Name'), this_mcs),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+            elif kwargs.get('mcs_type', 'graph') == '3d':
+                # 3D MCS requires hydrogens, so keep Hs here and remove them below
+                this_mcs = find_mcs_3d(molecule_a=molecule, molecule_b=target,
+                                       num_threads=kwargs.get('num_threads', 0), verbosity=verbosity,
+                                       savestate=save_state, maxMatches=kwargs['maxMatches']).smartsString
+                os_util.local_print('MCS between molecules {} and {} was obtained by find_mcs_3d and is {}'
+                                    ''.format(molecule.GetProp('_Name'), target.GetProp('_Name'),
+                                              this_mcs),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+            else:
+                os_util.local_print('MCS type {} not know, please select between "graph" and "3d"'
+                                    ''.format(kwargs.get('mcs_type')),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+                raise ValueError('MCS type {} not know, please select between "graph" and "3d"'
+                                 ''.format(kwargs.get('mcs_type')))
+            core_mol = rdkit.Chem.MolFromSmarts(this_mcs)
+
+            sanitize_return = rdkit.Chem.SanitizeMol(core_mol, catchErrors=True)
+            if sanitize_return != 0:
+                os_util.local_print('Could not sanitize common core between target mol and {}\nError {} when running '
+                                    'rdkit.Chem.SanitizeMol\nThis is the molecule representing the common core between '
+                                    'structures (without sanitization): {}'
+                                    ''.format(molecule.GetProp("_Name"), sanitize_return,
+                                              rdkit.Chem.MolToSmiles(core_mol)),
+                                    msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
+
+            try:
+                core_mol = rdkit.Chem.RemoveHs(core_mol)
+            except (rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                    rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
+                core_mol = rdkit.Chem.RemoveHs(core_mol, sanitize=False)
+
+            temp_core_structure = mol_util.loose_replace_side_chains(target, core_mol, use_chirality=True)
+            if temp_core_structure is None:
+                try:
+                    target_name = target.GetProp('_Name')
+                except KeyError:
+                    target_name = target.__str__()
+                os_util.local_print('Could not process the core structure to embed while working with the molecule '
+                                    '{} (SMILES={}). mol_util.loose_replace_side_chains(target, core_mol) failed. '
+                                    'core_mol: {} (SMARTS={}) target: {} (SMARTS={})'
+                                    ''.format(molecule.GetProp('_Name'),
+                                              rdkit.Chem.MolToSmiles(molecule), core_mol,
+                                              rdkit.Chem.MolToSmarts(core_mol),
+                                              target_name, rdkit.Chem.MolToSmiles(target)),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
+            else:
+                core_mol = temp_core_structure
+
+            # Remove * atoms from common core
+            core_mol = DeleteSubstructs(core_mol, rdkit.Chem.MolFromSmiles('*'))
+            if core_mol is None:
+                os_util.local_print('Could not delete side chains between target mol and {}\n\t'
+                                    'DeleteSubstructs(core_mol, rdkit.Chem.MolFromSmiles("*")) failed.\n\t'
+                                    'core_mol: {} (SMARTS={})'
+                                    ''.format(molecule.GetProp("_Name"),
+                                              core_mol, rdkit.Chem.MolToSmarts(core_mol)),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
+
+            os_util.local_print('This is the Smiles representation of the common core: {}'
+                                ''.format(rdkit.Chem.MolToSmiles(core_mol)),
+                                msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+            try:
+                core_mol = rdkit.Chem.RemoveHs(core_mol)
+            except (rdkit.Chem.rdchem.AtomValenceException, rdkit.Chem.rdchem.KekulizeException,
+                    rdkit.Chem.rdchem.AtomKekulizeException, rdkit.Chem.AtomSanitizeException):
+                os_util.local_print('Failed to sanitize the molecular representation of the common core: {}. Could not '
+                                    'remove Hs. Going on.'
+                                    ''.format(rdkit.Chem.MolToSmiles(core_mol)),
+                                    msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
+            constrained_embed_forcefield(molecule, core=core_mol, atom_map=atom_map, num_conformations=num_conformers,
                                          randomseed=randomseed, verbosity=verbosity, **kwargs)
 
     if molecule.GetNumConformers() == 0:
