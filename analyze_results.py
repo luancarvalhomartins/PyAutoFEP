@@ -1034,6 +1034,8 @@ def ddg_to_center_ddg(ddg_graph, center, method='shortest', ddg_key='final_ddg',
                         os_util.local_print('Could not find a path to connect nodes {} and {}. Cannot go on. Check the '
                                             ' perturbations and your input graph. Alternatively, rerun with no_checks '
                                             'to force execution and ignore this error.'
+                                            'This error is likely caused by the FEP not running for some of the '
+                                            'legs in the perturbation map. Please, check the FEP logs.'
                                             ''.format(each_node, center),
                                             msg_verbosity=os_util.verbosity_level.error,
                                             current_verbosity=verbosity)
