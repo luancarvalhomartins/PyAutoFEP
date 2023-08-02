@@ -639,7 +639,7 @@ def process_dummy_atoms(molecule, verbosity=0):
     return molecule
 
 
-@os_util.trace
+@os_util.trace_function
 def adjust_query_properties(query_molecule, generic_atoms=False, ignore_charge=True, ignore_isotope=True, verbosity=0):
     """ Adjust query settings removing all charges, isotope, aromaticity and valence info from core_structure SMARTS
 
@@ -1395,7 +1395,7 @@ def read_small_molecule_from_pdbqt(ligand_file, smiles=None, charge_error_tol=0.
             return temp_mol
 
 
-@os_util.trace
+@os_util.trace_function
 def read_small_molecule_from_pdb(ligand_data, smiles=None, die_on_error=True, verbosity=0):
     """ Reads a molecule from a PDB file or block using RDKit, falling back to OpenBabel
 

@@ -42,7 +42,7 @@ import os_util
 import savestate_util
 
 
-@os_util.trace
+@os_util.trace_function
 def constrained_embed_forcefield(molecule, core, core_conf_id=-1, atom_map=None, num_conformations=1, randomseed=2342,
                                  restraint_steps=(10.0, 50.0, 100.0), minimization_steps=5,
                                  force_field=rdkit.Chem.AllChem.UFFGetMoleculeForceField, verbosity=0, **kwargs):
@@ -167,7 +167,7 @@ def get_crippen_o3a_score(molecule_a, molecule_b, conf_a=-1, conf_b=-1, max_iter
     return -o3a_data.Score()
 
 
-@os_util.trace
+@os_util.trace_function
 def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_atoms=None, coord_map=None,
                                   randomseed=2342, num_conformers=200, volume_function='tanimoto',
                                   rigid_molecule_threshold=1, num_threads=0, mcs=None, atom_map=None, save_state=None,
@@ -609,7 +609,7 @@ def constrained_embed_shapeselect(molecule, target, core_conf_id=-1, matching_at
     return molecule
 
 
-@os_util.trace
+@os_util.trace_function
 def constrained_embed_dualmol(pseudomolecule, target, core_conf_id=-1, pseudomol_conf_id=-1, randomseed=2342,
                               num_conformers=50, volume_function='tanimoto', rigid_molecule_threshold=1,
                               num_threads=0, mcs=None, mcs_type='graph', max_matches=32, savestate=None, verbosity=0):
@@ -1529,7 +1529,7 @@ def find_mcs(mol_list, savestate=None, verbosity=0, **kwargs):
                                        useSVG=True)
 
         with open('mcs_plot_{}_{}.svg'.format('_'.join([os.path.basename(m.GetProp('_Name')) for m in ms]),
-                                              time.strftime('%H%M%S_%d%m%Y')), 'w') as fh:
+                                              os_util.date_fmt()), 'w') as fh:
             fh.write(img)
 
     # Find the actual, final MCS

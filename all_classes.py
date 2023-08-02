@@ -50,7 +50,7 @@ def namedlist(typename, field_names, defaults=(), types=()):
             raise TypeError("Expected {} types, got {}".format(len(types), fields_len))
 
     class ResultType(list):
-        __slots__ = ('_parent', )
+        __slots__ = ('_parent',)
         _fields = field_names
 
         def _fixed_length_error(*args, **kwargs):
@@ -832,8 +832,8 @@ class TopologyData:
 
     # Fields for unpacking angle for lines bearing both topology A and B data (assembles a dict of possible fields list)
     __angledata_dict_dualtop = {code: ['{}_A'.format(i) for i in this_terms[:-1]]
-                                        + ['{}_B'.format(i) for i in this_terms[:-1]]
-                                        + [this_terms[-1]]
+                                      + ['{}_B'.format(i) for i in this_terms[:-1]]
+                                      + [this_terms[-1]]
                                 for code, this_terms in __angledata_dict.items()
                                 if code in [1, 2, 5, 8]}
     __angledata_fields_dualtop = {function: ['atom_i', 'atom_j', 'atom_k', 'function', *parameters]
@@ -991,7 +991,7 @@ class TopologyData:
         from prepare_dual_topology import read_index_data, make_index
 
         if not test_sol_molecules:
-            test_sol_molecules = ['SOL', 'WAT', 'HOH', 'TIP3']
+            test_sol_molecules = water_res_names
         if isinstance(test_sol_molecules, str):
             test_sol_molecules = [test_sol_molecules]
 
@@ -2375,11 +2375,13 @@ class PDBFile:
             super(PDBFile.PDBModel, self).__init__()
             self.model_num = model_num
 
-        def __str__(self):
+        def __str__(self, strict=True):
             output_data = []
             for each_line in self:
                 if isinstance(each_line, PDBFile.PDBAtom):
-                    output_data.append(each_line.to_line())
+                    if each_line.suppressed and strict:
+                        continue
+                    output_data.append(each_line.__str__())
                 else:
                     output_data.append(each_line)
 
@@ -2416,9 +2418,14 @@ class PDBFile:
             for each_atom in self:
                 each_atom.resname = self.resname
 
+        def guess_is_water(self):
+            return self.resname in water_res_names
+
     class PDBAtom:
-        """ A class to store PDB atoms, reads atom lines following the PDB structure:
+        """A class to store PDB atoms, reads atom lines following the PDB structure:
+
         (from http://www.wwpdb.org/documentation/file-format-content/format33/sect9.html#ATOM)
+
         # COLUMNS        DATA  TYPE    FIELD        DEFINITION
         # -------------------------------------------------------------------------------------
         #  1 -  6        Record name   "ATOM  "
@@ -2458,11 +2465,20 @@ class PDBFile:
             if self.charge.strip() == '':
                 self.charge = ''
 
-        def to_line(self):
-            ret_line = '{:6s}{:5d} {:^4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}          ' \
-                       '{:>2s}{:2s}\n'.format(self.record_name, int(self.serial % 1e5), self.name, self.alt_loc,
-                                              self.resname, self.chain, self.res_seq, self.i_code, *self.coords,
-                                              self.occupancy, self.beta_temp, self.element, self.charge)
+            # In case this is set to True, atom line will be replaced by a REMARK
+            self.suppressed = False
+
+        def __str__(self):
+            """Return a line corresponding to this atom"""
+            if not self.suppressed:
+                ret_line = '{:6s}{:5d} {:^4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}' \
+                           '          {:>2s}{:2s}\n'.format(self.record_name, int(self.serial % 1e5), self.name,
+                                                            self.alt_loc, self.resname, self.chain,
+                                                            int(self.res_seq % 1e4), self.i_code, *self.coords,
+                                                            self.occupancy, self.beta_temp, self.element, self.charge)
+            else:
+                ret_line = 'REMARK Atom {} {} {} suppressed, line {}\n' \
+                           ''.format(self.name, self.serial, self.resname, self.line_num)
             return ret_line
 
     def __init__(self, input_file):
@@ -2536,7 +2552,7 @@ class PDBFile:
         """
         for n, each_atom in enumerate(self.atoms):
             each_atom.serial = n + 1
-            self.file_lines[each_atom.line_num] = each_atom.to_line()
+            self.file_lines[each_atom.line_num] = each_atom.__str__()
 
     def update_atoms_from_lines(self):
         """ Updates the atoms line_num from self.file_lines
@@ -2570,7 +2586,7 @@ class PDBFile:
                 n += 1
             each_atom.res_seq = n
 
-    def to_file(self, output_file=None, output_connect=False, verbosity=0):
+    def to_file(self, output_file=None, output_connect=False, strict=True):
         """Dumps PDB structure to a PDB file
 
         Parameters
@@ -2580,8 +2596,8 @@ class PDBFile:
         output_connect : bool
             Also write PDB CONECT records. Note: no new CONECTs will be generated, only ones present in the read file
             would be written
-        verbosity : int
-            Sets verbosity level
+        strict : bool
+            Suppress atom lines converted to REMARKs, as PDB format does not allow for REMARKs in the MODEL section.
 
         Returns
         -------
@@ -2594,7 +2610,9 @@ class PDBFile:
                 continue
 
             if isinstance(each_line, PDBFile.PDBAtom):
-                output_data.append(each_line.to_line())
+                if each_line.suppressed and strict:
+                    continue
+                output_data.append(each_line.__str__())
             else:
                 output_data.append(each_line)
 
@@ -2745,6 +2763,27 @@ class MolecularTopologies(Namespace):
         return '< MergedTopologies object (name="{}") >'.format(self.dual_molecule_name)
 
 
+class XVGData:
+    """ Class to read XVG file. Ploting maybe added later. """
+
+    def __init__(self, filename):
+        self.data = None
+        self.comments, self.header = [], []
+        self.read_xvg(filename=filename)
+
+    def read_xvg(self, filename):
+        self.data = numpy.loadtxt(filename, comments=("@", "#"), dtype=float)
+        self.comments, self.header = [], []
+        with open(filename) as fh:
+            for each_line in fh:
+                if each_line.startswith('#'):
+                    self.comments.append(each_line.rstrip()[1:])
+                elif each_line.startswith('@'):
+                    self.header.append(each_line.rstrip()[1:])
+
+
 # Class to hold coion data, used for charge perturbations
 coion_class = namedlist('CoIonData', ['dual_topology', 'structure_data', 'delta_charge', 'ion_name', 'water_o_atom',
                                       'coion_topology_files'])
+
+water_res_names = ['SOL', 'WAT', 'HOH', 'TIP3', 'HO4', 'HO5']

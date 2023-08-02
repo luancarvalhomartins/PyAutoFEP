@@ -27,7 +27,6 @@ import merge_topologies
 from all_classes import Namespace
 import os
 import os_util
-from time import strftime
 from shutil import copy2, copytree, rmtree
 
 
@@ -106,8 +105,7 @@ class SavableState(Namespace):
 
         else:
             # User did not supplied a name, generate one
-            from time import strftime
-            self.data_file = 'savedata_{}.pkl'.format(strftime('%d%m%Y_%H%M%S'))
+            self.data_file = 'savedata_{}.pkl'.format(os_util.date_fmt())
 
     def _read_data(self, input_file):
         """ Reads a pickle file, returns its object or None on fail
@@ -354,7 +352,7 @@ class UserStorageDirectory:
             fh.write(contents)
 
         # Save a backup of the file with and timestamp
-        backup_name = os.path.join(self.path, '{}_{}{}'.format(os.path.basename(file_name), strftime('%H%M%S_%d%m%Y'),
+        backup_name = os.path.join(self.path, '{}_{}{}'.format(os.path.basename(file_name), os_util.date_fmt(),
                                                                os.path.splitext(file_name)))
         copy2(os.path.join(self.path, file_name), backup_name)
 
@@ -380,7 +378,7 @@ class UserStorageDirectory:
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise ValueError('invalid source name')
 
-        backup_name = os.path.join(self.path, '{}_{}{}'.format(os.path.basename(dest_file), strftime('%H%M%S_%d%m%Y'),
+        backup_name = os.path.join(self.path, '{}_{}{}'.format(os.path.basename(dest_file), os_util.date_fmt(),
                                                                os.path.splitext(dest_file)))
         try:
             copy2(source, os.path.join(self.path, dest_file))

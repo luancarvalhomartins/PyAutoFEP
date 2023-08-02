@@ -1,8 +1,26 @@
 # PyAutoFEP change log
-Notable changes to PyAutoFEP will be documented here. As of 2023-06-22, there is no versioned release, so for now major
+Notable changes to PyAutoFEP will be documented here. As of 2023-08-01, there is no versioned release, so for now major
 changes are referenced by commit. Sorry for this inconvenience.
 
-## [2c0b9da] - 2023-06-2023
+## [_TBD_] - 2023-08-01
+
+This commit improves handling of pre_solvated systems. First, it adds the internal selection method to 
+`prepare_dual_topology.py`, so that MDAnalysis is no longer required for working with such input. Second, 
+`prepare_dual_topology.py` will try to automatically generate topology and position restraints for pre-solvated systems.
+
+### Added
+- Automated topology generation for pre-solvated systems
+
+### Changed
+- The default value: `selection_method=internal` now works
+- Water molecules are now renamed to SOL for pre-solvated systems 
+
+### Fixed
+- Fixed #78
+- Fixed #95
+
+
+## [2c0b9da] 2023-06-2023
 
 This commit sets a new default value: `output_collecttype=python`. Previously, the default collect script was a binary
 created using PyInstaller. This was done because back in 2020 not every cluster had a modern enough Python3 version, so

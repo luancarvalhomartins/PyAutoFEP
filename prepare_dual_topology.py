@@ -186,7 +186,252 @@ def fix_chain_restraint(restraint_file, first_atom=1, verbosity=0):
         fh.writelines(restraint_data_mod)
 
 
-@os_util.trace
+@os_util.trace_function
+def build_posres_and_chain_itp(input_topology, input_pdb, file_names_data=None, output_topology=None, workdir=None,
+                               gmx_bin='gmx', molname=None, no_checks=False, verbosity=0):
+    """Builds the position restraints and chain topology files for the input protein.
+
+        Parameters
+        ----------
+        input_topology : str
+            The path to the input topology file.
+        input_pdb : str
+            The path to the input PDB file.
+        file_names_data : dict
+            A dictionary of the file names for the position restraints and chain topology files. If None(the default),
+             the default file names will be used.
+        output_topology : str
+            The path to the output topology file. If None (the default), the basename of the input topology file will
+             be used.
+        workdir : str
+            The working directory. If None, defaults to os.getpwd()
+        gmx_bin : str
+            The path to the GROMACS binary.
+        molname : str
+            Use this name to look for protein topologies includes
+        no_checks : bool
+            Whether to skip some checks.
+        verbosity : int
+            The verbosity level.
+
+        Returns
+        -------
+        dict
+            A dictionary of the files to be copied
+        """
+
+    position_restraint_output = '; Include restraint file\n#ifdef {defname}\n#include "{resfile}"\n#endif\n'
+
+    if output_topology is None:
+        output_topology = os.path.basename(input_topology)
+    if workdir is None:
+        workdir = os.getcwd()
+    if file_names_data is None:
+        file_names_data = {index: os.path.join(workdir, filename.format(os_util.date_fmt()))
+                           for index, filename in {'posres_ca_top': 'posres_protein_Ca_{{}}_{}.itp',
+                                                   'posres_backbone_top': 'posres_protein_BB_{{}}_{}.itp',
+                                                   'posres_index_ndx': 'posres_index.ndx',
+                                                   }.items()}
+    if molname is None:
+        molname = os.path.splitext(os.path.basename(input_topology))[0]
+
+    system_topology_list = os_util.read_file_to_buffer(
+        filename=input_topology,
+        die_on_error=True,
+        error_message='Failed to read topology file during generation of position restraints.',
+        return_as_list=True,
+    )
+    new_files = {}
+
+    # 1 Read the name of protein topology files and add to copyfile dict
+    #   This will look for the first occurrence of a #include containing what should be a macromolecule topology, then
+    #   read all subsequent #include lines with the same format, until another directive or including of other
+    #   components (eg, water, ions) is found.
+
+    # Get the basename of the molecule and set up the regex
+    search_fn = re.compile(r'#include\s+\"' + molname + r'_[a-zA-Z0-9_-]+\.itp\"', flags=re.IGNORECASE)
+
+    position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
+    if position is False:
+        search_fn = re.compile(r'\s*\[\s+moleculetype\s+]', flags=re.IGNORECASE)
+        if os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';') is False:
+            try:
+                shutil.copy2(input_topology, output_topology)
+            except shutil.SameFileError:
+                pass
+            os_util.local_print('Failed to find both a #include directive for protein topologies and a '
+                                '[ moleculetype ] directive in the topology file {}. This suggests a problem in '
+                                'topology file formatting. Please, your check inputs. Copying {} to {}.'
+                                ''.format(input_topology, input_topology,
+                                          output_topology),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+    else:
+        for each_line in system_topology_list[position:]:
+            if each_line == '\n' or each_line.lstrip().startswith(';'):
+                continue
+            if not search_fn.match(each_line):
+                break
+            else:
+                protein_itp = re.findall(molname + r'_[a-zA-Z0-9_-]+\.itp', each_line)[0]
+                new_files[os.path.join(workdir, protein_itp)] = protein_itp
+        if not new_files:
+            if no_checks:
+                os_util.local_print('Failed to parse #include directives for protein topologies in topology file {}. '
+                                    'This should not happen. Because you are running with no_checks, I will try to '
+                                    'go on.'
+                                    ''.format(input_topology),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            else:
+                output_topology = os.path.basename(input_topology)
+                shutil.copy2(input_topology, output_topology)
+                os_util.local_print('Failed to parse #include directives for protein topologies in topology file {}. '
+                                    'This suggests a problem in topology file formatting. Please, your check inputs. '
+                                    'Copying {} to {}.'
+                                    ''.format(input_topology, input_topology,
+                                              output_topology),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise SystemExit(1)
+
+    # 2 Tries to find includes for restraint files in the topology (this is the case for a single protein chain)
+    search_fn = re.compile(r'#ifdef POSRES\s', flags=re.IGNORECASE)
+    position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
+    if position is not False:
+        for each_line in system_topology_list[position + 1:]:
+            each_line = each_line.lstrip()
+            if each_line.startswith(';'):
+                continue
+            if each_line.lower().startswith('#include'):
+                this_filename = re.findall(r'"\w+.itp"', each_line)
+                try:
+                    this_filename = this_filename[0]
+                except KeyError:
+                    output_topology = os.path.basename(input_topology)
+                    shutil.copy2(input_topology, output_topology)
+                    os_util.local_print('Failed to parse #include directive for restraint file in topology file {}. '
+                                        'This suggests a problem in topology file formatting. Please, your check '
+                                        'inputs. Copying {} to {}.'
+                                        ''.format(input_topology, input_topology,
+                                                  output_topology),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise SystemExit(1)
+                else:
+                    this_filename = this_filename.replace('"', '')
+                    dest_file_name = os.path.join(workdir, this_filename)
+                    shutil.move(this_filename, dest_file_name)
+                    new_files[dest_file_name] = this_filename
+            elif each_line.lower().startswith('#endif'):
+                break
+
+        # Rename POSRES to POSRES_PROTEIN = restrains heavy protein atoms
+        system_topology_list[position] = system_topology_list[position].replace('POSRES', 'POSRES_PROTEIN')
+
+        # Generate and the add position restraints for protein Ca and backbone
+        for this_filename, restr_group, resrt_define in (
+            (file_names_data['posres_ca_top'].format('singlechain'), 'C-alpha', 'POSRES_PROTEIN_CA'),
+            (file_names_data['posres_backbone_top'].format('singlechain'), 'Backbone', 'POSRES_PROTEIN_BB')
+        ):
+            restrt_list = ['genrestr', '-f', input_pdb, '-o', this_filename]
+            os_util.run_gmx(gmx_bin, restrt_list, f'{restr_group}\n', verbosity=verbosity)
+            system_topology_list.insert(
+                position,
+                position_restraint_output.format(defname=resrt_define, resfile=os.path.basename(this_filename))
+            )
+            new_files[this_filename] = os.path.basename(this_filename)
+
+        # Save the modified topology file
+        with open(output_topology, 'w') as fh:
+            fh.writelines(system_topology_list)
+
+    else:
+        # This is a multichain topology. Generate and the add position restraints for protein, Ca and backbone
+        split_chain_list = ['make_ndx',
+                            '-f', input_pdb,
+                            '-o', file_names_data['posres_index_ndx']]
+        os_util.run_gmx(gmx_bin, split_chain_list, 'splitch 1\nsplitch 3\nsplitch 4\nq\n', verbosity=verbosity)
+        index_posre_data = read_index_data(file_names_data['posres_index_ndx'], verbosity=verbosity)
+
+        # Read index data to determine the number of chains groups, Ca groups and backbone groups
+        chains_groups_prot = [each_group for each_group in index_posre_data
+                              if re.match(pattern=r'Protein_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
+                              is not None]
+        chains_groups_calpha = [each_group for each_group in index_posre_data
+                                if re.match(pattern=r'C-alpha_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
+                                is not None]
+        chains_groups_backbone = [each_group for each_group in index_posre_data
+                                  if re.match(pattern=r'Backbone_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
+                                  is not None]
+
+        # Now generate restraints
+        chain_restr_data = {}
+        for each_filename, each_group_list, resrt_define in (
+                (file_names_data['posres_ca_top'], chains_groups_calpha, 'POSRES_PROTEIN_CA'),
+                (file_names_data['posres_backbone_top'], chains_groups_backbone, 'POSRES_PROTEIN_BB')
+        ):
+            for n, (prot_group, each_index_group) in enumerate(zip(chains_groups_prot, each_group_list)):
+                this_filename = each_filename.format(n + 1)
+                restrt_list = ['genrestr', '-f', input_pdb, '-n',
+                               file_names_data['posres_index_ndx'], '-o', this_filename]
+                os_util.run_gmx(gmx_bin, restrt_list, each_index_group + '\n', verbosity=verbosity)
+
+                fix_chain_restraint(this_filename, index_posre_data[prot_group][0], verbosity=verbosity)
+
+                this_resrt_data = {
+                    'posres_filename': this_filename,
+                    'topology_string': position_restraint_output.format(defname=resrt_define,
+                                                                        resfile=os.path.basename(this_filename))
+                }
+                chain_restr_data.setdefault(n, []).append(this_resrt_data)
+
+        # From protein topology files, tries to read position restraints files and adds them to new_files
+        chain_count = 0
+        for each_file in new_files.copy().values():
+            each_file = os.path.join(workdir, each_file)
+            this_file_data = os_util.read_file_to_buffer(each_file, die_on_error=True, return_as_list=True,
+                                                         error_message='Failed to read topology file when building the '
+                                                                       'system.',
+                                                         verbosity=verbosity)
+            position = os_util.inner_search('#ifdef POSRES', this_file_data, apply_filter=';')
+            if position is False:
+                os_util.local_print('Protein topology file {} does not have a "#ifdef POSRES" directive. I cannot '
+                                    'find the position restraint file, so you will may not be able to use position '
+                                    'restraints in this system'.format(each_file),
+                                    msg_verbosity=os_util.verbosity_level.warning,
+                                    current_verbosity=verbosity)
+            else:
+                line_data = this_file_data[position + 1].split()
+                if line_data[0] != '#include':
+                    os_util.local_print('Could not understand your POSRES directive {} in file {}. I cannot '
+                                        'find the position restraint file, so you will may not be able to use '
+                                        'position restraints in this system'.format(line_data, each_file),
+                                        msg_verbosity=os_util.verbosity_level.warning,
+                                        current_verbosity=verbosity)
+                else:
+                    # This topology file includes a chain topology
+                    old_file_name = line_data[1].strip('"')
+                    output_topology = os.path.join(workdir, old_file_name)
+                    shutil.move(old_file_name, output_topology)
+                    new_files[output_topology] = old_file_name
+
+                    if 'posre_Protein' in os.path.basename(old_file_name):
+                        # This is a protein restraint file. Use POSRES_PROTEIN to restrain heavy protein atoms
+                        this_file_data[position] = this_file_data[position].replace('POSRES', 'POSRES_PROTEIN')
+
+                        # And position restraints for protein Ca and BB
+                        for this_resrt_data in chain_restr_data[chain_count]:
+                            this_filename = this_resrt_data['posres_filename']
+                            new_files[this_filename] = os.path.basename(this_filename)
+                            this_file_data.insert(position, this_resrt_data['topology_string'])
+                        chain_count += 1
+
+            # Save the modified chain topology file
+            with open(each_file, 'w') as fh:
+                fh.writelines(this_file_data)
+
+    return new_files
+
+
+@os_util.trace_function
 def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='FullSystem.top',
                            index_file='index.ndx', forcefield=1, index_groups=None,
                            selection_method='internal', gmx_bin='gmx', extradirs=None, extrafiles=None,
@@ -248,7 +493,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
 
     # Save intermediate files used to build the system to this dir
     build_system_dir = os.path.join(base_dir, 'protein',
-                                    'build_system_{}'.format(time.strftime('%H%M%S_%d%m%Y')))
+                                    'build_system_{}'.format(os_util.date_fmt()))
     os_util.makedir(build_system_dir)
 
     if extradirs:
@@ -266,7 +511,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                                 current_verbosity=verbosity)
 
     # These are the intermediate build files
-    timestamp = time.strftime('%H%M%S_%d%m%Y')
+    timestamp = os_util.date_fmt()
     build_files_dict = {index: os.path.join(build_system_dir, filename.format(timestamp))
                         for index, filename in {'protein_pdb': 'protein_step1_{}.pdb',
                                                 'protein_top': 'protein_step1_{}.top',
@@ -419,187 +664,24 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
                         ''.format(build_files_dict['proteinlig_top'], system_topology_list.count('\n')),
                         msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
-    # 2.4 Read the name of protein topology files and add to copyfile dict
-    #   This will look for the first occurrence of a #include containing what should be a macromolecule topology, then
-    #   read all subsequent #include lines with the same format, until another directive or including of other
-    #   components (eg, water, ions) are found.
-    copyfiles = {}
-    molname = 'protein_step1_{}'.format(timestamp)
-    search_fn = re.compile(r'#include\s+\"' + molname + r'_[a-zA-Z0-9_-]+\.itp\"', flags=re.IGNORECASE)
-    position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
-    if position is False:
-        search_fn = re.compile(r'\s*\[\s+moleculetype\s+]', flags=re.IGNORECASE)
-        if os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';') is False:
-            new_file_name = os.path.basename(build_files_dict['protein_top'])
-            shutil.copy2(build_files_dict['protein_top'], new_file_name)
-            os_util.local_print('Failed to find both a #include directive for protein topologies and a '
-                                '[ moleculetype ] directive in the topology file {}. This suggests a problem in '
-                                'topology file formatting. Please, your check inputs. Copying {} to {}'
-                                ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
-                                          new_file_name),
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            raise SystemExit(1)
-    else:
-        for each_line in system_topology_list[position:]:
-            if each_line == '\n' or each_line.lstrip().startswith(';'):
-                continue
-            if not search_fn.match(each_line):
-                break
-            else:
-                protein_itp = re.findall(molname + r'_[a-zA-Z0-9_-]+\.itp', each_line)[0]
-                copyfiles[os.path.join(build_system_dir, protein_itp)] = protein_itp
-        if not copyfiles:
-            if no_checks:
-                os_util.local_print('Failed to parse #include directives for protein topologies in topology file {}. '
-                                    'This should not happen. Because you are running with no_checks, I will try to '
-                                    'go on.'
-                                    ''.format(build_files_dict['protein_top']),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-            else:
-                new_file_name = os.path.basename(build_files_dict['protein_top'])
-                shutil.copy2(build_files_dict['protein_top'], new_file_name)
-                os_util.local_print('Failed to parse #include directives for protein topologies in topology file {}. '
-                                    'This suggests a problem in topology file formatting. Please, your check inputs. '
-                                    'Copying {} to {}.'
-                                    ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
-                                              new_file_name),
-                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                raise SystemExit(1)
-
-    # 2.5.1 Tries to find restraint files in the topology (this is the case for a single protein chain)
-    search_fn = re.compile(r'#ifdef POSRES\s', flags=re.IGNORECASE)
-    position = os_util.inner_search(search_fn.match, system_topology_list, apply_filter=';')
-    if position is not False:
-        for each_line in system_topology_list[position + 1:]:
-            each_line = each_line.lstrip()
-            if each_line.startswith(';'):
-                continue
-            if each_line.lower().startswith('#include'):
-                this_filename = re.findall(r'"\w+.itp"', each_line)
-                try:
-                    this_filename = this_filename[0]
-                except KeyError:
-                    new_file_name = os.path.basename(build_files_dict['protein_top'])
-                    shutil.copy2(build_files_dict['protein_top'], new_file_name)
-                    os_util.local_print('Failed to parse #include directive for restraint file in topology file {}. '
-                                        'This suggests a problem in topology file formatting. Please, your check '
-                                        'inputs. Copying {} to {}.'
-                                        ''.format(build_files_dict['protein_top'], build_files_dict['protein_top'],
-                                                  new_file_name),
-                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-                    raise SystemExit(1)
-                else:
-                    this_filename = this_filename.replace('"', '')
-                    dest_file_name = os.path.join(build_system_dir, this_filename)
-                    shutil.move(this_filename, dest_file_name)
-                    copyfiles[dest_file_name] = this_filename
-            elif each_line.lower().startswith('#endif'):
-                break
-
-        # POSRES_PROTEIN restrains heavy protein atoms
-        system_topology_list[position] = system_topology_list[position].replace('POSRES', 'POSRES_PROTEIN')
-
-        # Generate and the add position restraints for protein Ca
-        for this_filename, restr_group, resrt_define in (
-                (build_files_dict['posres_ca_top'].format('singlechain'), 'C-alpha', 'POSRES_PROTEIN_CA'),
-                (build_files_dict['posres_backbone_top'].format('singlechain'), 'Backbone', 'POSRES_PROTEIN_BB')
-        ):
-            restrt_list = ['genrestr', '-f', build_files_dict['protein_pdb'], '-o', this_filename]
-            os_util.run_gmx(gmx_bin, restrt_list, f'{restr_group}\n', verbosity=verbosity)
-            system_topology_list.insert(position,
-                                        position_restraint_output.format(defname=resrt_define,
-                                                                         resfile=os.path.basename(this_filename)))
-            copyfiles[this_filename] = os.path.basename(this_filename)
-
-        # Save the modified topology file
-        with open(build_files_dict['proteinlig_top'], 'w') as fh:
-            fh.writelines(system_topology_list)
-
-    # 2.5.2 Generate and the add position restraints for protein Ca when there are multiple chains
-    split_chain_list = ['make_ndx', '-f', build_files_dict['protein_pdb'],
-                        '-o', build_files_dict['posres_index_ndx']]
-    os_util.run_gmx(gmx_bin, split_chain_list, 'splitch 1\nsplitch 3\nsplitch 4\nq\n', verbosity=verbosity)
-    index_posre_data = read_index_data(build_files_dict['posres_index_ndx'], verbosity=verbosity)
-    chains_groups_prot = [each_group for each_group in index_posre_data
-                          if re.match(pattern=r'Protein_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
-                          is not None]
-    chains_groups_calpha = [each_group for each_group in index_posre_data
-                            if re.match(pattern=r'C-alpha_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
-                            is not None]
-    chains_groups_backbone = [each_group for each_group in index_posre_data
-                              if re.match(pattern=r'Backbone_chain[1-9]+', string=each_group, flags=re.IGNORECASE)
-                              is not None]
-
-    chain_restr_data = {}
-    for each_filename, each_group_list, resrt_define in (
-            (build_files_dict['posres_ca_top'], chains_groups_calpha, 'POSRES_PROTEIN_CA'),
-            (build_files_dict['posres_backbone_top'], chains_groups_backbone, 'POSRES_PROTEIN_BB')
-    ):
-        for n, (prot_group, each_index_group) in enumerate(zip(chains_groups_prot, each_group_list)):
-            this_filename = each_filename.format(n + 1)
-            restrt_list = ['genrestr', '-f', build_files_dict['protein_pdb'], '-n',
-                           build_files_dict['posres_index_ndx'], '-o', this_filename]
-            os_util.run_gmx(gmx_bin, restrt_list, each_index_group + '\n', verbosity=verbosity)
-
-            fix_chain_restraint(this_filename, index_posre_data[prot_group][0], verbosity=verbosity)
-
-            this_resrt_data = {
-                'posres_filename': this_filename,
-                'topology_string': position_restraint_output.format(defname=resrt_define,
-                                                                    resfile=os.path.basename(this_filename))
-            }
-            chain_restr_data.setdefault(n, []).append(this_resrt_data)
-
-    # 2.5.3 From protein topology files, tries to read position restraints files and add them to copyfile dict
-    chain_count = 0
-    for each_file in copyfiles.copy().values():
-        each_file = os.path.join(build_system_dir, each_file)
-        this_file_data = os_util.read_file_to_buffer(each_file, die_on_error=True, return_as_list=True,
-                                                     error_message='Failed to read topology file when building the '
-                                                                   'system.',
-                                                     verbosity=verbosity)
-        position = os_util.inner_search('#ifdef POSRES', this_file_data, apply_filter=';')
-        if position is False:
-            os_util.local_print('Protein topology file {} does not have a "#ifdef POSRES" directive. I cannot '
-                                'find the position restraint file, so you will may not be able to use position '
-                                'restraints in this system'.format(each_file),
-                                msg_verbosity=os_util.verbosity_level.warning,
-                                current_verbosity=verbosity)
-        else:
-            line_data = this_file_data[position + 1].split()
-            if line_data[0] != '#include':
-                os_util.local_print('Could not understand your POSRES directive {} in file {}. I cannot '
-                                    'find the position restraint file, so you will may not be able to use '
-                                    'position restraints in this system'.format(line_data, each_file),
-                                    msg_verbosity=os_util.verbosity_level.warning,
-                                    current_verbosity=verbosity)
-            else:
-                # This topology file includes a chain topology, assumes
-                old_file_name = line_data[1].strip('"')
-                new_file_name = os.path.join(build_system_dir, old_file_name)
-                shutil.move(old_file_name, new_file_name)
-                copyfiles[new_file_name] = old_file_name
-
-                if 'posre_Protein' in os.path.basename(old_file_name):
-                    # This is a protein restraint file. Use POSRES_PROTEIN to restrain heavy protein atoms
-                    this_file_data[position] = this_file_data[position].replace('POSRES', 'POSRES_PROTEIN')
-
-                    # And position restraints for protein Ca and BB
-                    for this_resrt_data in chain_restr_data[chain_count]:
-                        this_filename = this_resrt_data['posres_filename']
-                        copyfiles[this_filename] = os.path.basename(this_filename)
-                        this_file_data.insert(position, this_resrt_data['topology_string'])
-                    chain_count += 1
-
-        # Save the modified topology file
-        with open(each_file, 'w') as fh:
-            fh.writelines(this_file_data)
+    # 2.4 Get topology and restraints from the topology and generate posres files
+    copyfiles = build_posres_and_chain_itp(
+        input_topology=build_files_dict['proteinlig_top'],
+        input_pdb=build_files_dict['protein_pdb'],
+        file_names_data=build_files_dict,
+        output_topology=build_files_dict['proteinlig_top'],
+        workdir=build_system_dir,
+        gmx_bin=gmx_bin,
+        molname='protein_step1_{}'.format(timestamp),
+        no_checks=no_checks,
+        verbosity=verbosity
+    )
 
     # 3. Generate simulation box (gmx editconf) and solvate the complex (gmx solvate)
-    box_size = solvate_data['water_shell'] / 10.0
-    if box_size < 1:
-        os_util.local_print('You selected a water shell smaller than 10 \u00C5. Note that length units in input files '
-                            'are \u00C5.',
+    box_size = solvate_data['water_shell'] / 10.0     # angstrom -> nm
+    if box_size < 1.0:
+        os_util.local_print('You selected a water shell smaller than 10 \u00C5. Note that length units in '
+                            'input files are \u00C5.',
                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
 
     editconf_list = ['editconf', '-f', build_files_dict['system_pdb'], '-d', str(box_size),
@@ -1257,7 +1339,7 @@ def parse_poses_data(poses_data, no_checks=False, verbosity=0):
     return temp_data
 
 
-@os_util.trace
+@os_util.trace_function
 def parse_ligands_data(input_ligands, parameterize=None, ignore_problematic_inputs=False, savestate_util=None,
                        threads=1, no_checks=False, verbosity=0):
     """ Parse input ligands data from a text file, a pickle file, a list, or a dict
@@ -1668,6 +1750,7 @@ def parse_ligands_data(input_ligands, parameterize=None, ignore_problematic_inpu
     return ligand_dict
 
 
+@os_util.trace_function
 def read_index_data(index_file, verbosity=0):
     """
     :param str index_file: name of the index file
@@ -1742,8 +1825,8 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
         protein_data = all_classes.PDBFile(input_file=structure_file)
         output_data = []
         for each_line in protein_data.file_lines:
-            if isinstance(each_line, all_classes.PDBFile.PDBAtom):
-                output_data.append(each_line.to_line())
+            if isinstance(each_line, all_classes.PDBFile.PDBAtom) and not each_line.suppressed:
+                output_data.append(each_line.__str__())
                 if each_line == protein_data.atoms[last_protein_atom - 1]:
                     break
             else:
@@ -1814,9 +1897,10 @@ def edit_itp(itp_filename):
             raise SystemExit(1)
 
 
+@os_util.trace_function
 def make_index(new_index_file, structure_data, index_data=None, method='internal', gmx_bin='gmx',
                logfile=None, ligand_name='LIG', water_name='SOL', verbosity=0):
-    """Generate a index from data in structure_data using groups in index_data
+    """Generate an index from data in structure_data using groups in index_file
 
     Parameters
     ----------
@@ -1842,10 +1926,6 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
 
     if index_data is None:
         index_data = {}
-    os_util.local_print('Entering make_index: new_index_file={}, structure_data={}, index_data={}, method={}, '
-                        'gmx_bin={}, verbosity={}'
-                        ''.format(new_index_file, structure_data, index_data, method, gmx_bin, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     if method == 'mdanalysis':
         import MDAnalysis
@@ -1869,7 +1949,7 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
 
         [default_groups.setdefault(k, v) for k, v in index_data.items()]
 
-        # Generate a group per item in index_data and writes to new_index_file
+        # Generate a group per item in index_file and writes to new_index_file
         with MDAnalysis.selections.gromacs.SelectionWriter(new_index_file, mode='w') as ndx:
             for each_name, each_selection in default_groups.items():
                 this_selection = structure_data.select_atoms(each_selection)
@@ -1919,13 +1999,12 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
                             ''.format(method),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
         raise ValueError('Invalid selection method {}'.format(method))
-
-    ndx_groups = read_index_data(new_index_file, verbosity=0)
+    ndx_groups = read_index_data(new_index_file, verbosity=verbosity)
 
     if index_data:
         if not set(index_data.keys()).issubset(set(ndx_groups.keys())):
             os_util.local_print('Missing groups from index files. Please, verify your input files. Index groups '
-                                'in index_data are:\n{}\nIndex groups in file:\n{}'
+                                'in index_file are:\n{}\nIndex groups in file:\n{}'
                                 ''.format(', '.join(index_data.keys()), ', '.join(ndx_groups.keys())),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
@@ -2049,11 +2128,11 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
     # Save intermediate files used to build the water system to this dir
     solvate_data = set_default_solvate_data(solvate_data)
 
-    build_water_dir = os.path.join(water_dir, 'build_water_{}'.format(time.strftime('%H%M%S_%d%m%Y')))
+    build_water_dir = os.path.join(water_dir, 'build_water_{}'.format(os_util.date_fmt()))
     os_util.makedir(build_water_dir)
 
     # These are the intermediate build files
-    timestamp = time.strftime('%H%M%S_%d%m%Y')
+    timestamp = os_util.date_fmt()
     build_files_dict = {index: os.path.join(build_water_dir, filename.format(timestamp))
                         for index, filename in {'ligand_pdb': 'ligand_step1_{}.pdb',
                                                 'ligand_top': 'ligand_step1_{}.top',
@@ -2314,19 +2393,19 @@ def create_fep_dirs(dir_name, base_pert_dir, new_files=None, extra_dir=None, ext
                         current_verbosity=verbosity)
 
 
-def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, output_structure_file, index_data,
-                                    input_topology='', output_topology_file='', radius=3, selection_method='internal',
-                                    ligand_name='LIG', input_structure_lig_name='LIG', verbosity=0):
-    """ Adds the ligand ligand_molecule to the pre-solvated structure input_structure_file, relying in info from
+def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, output_structure_file, index_file,
+                                    input_topology='', output_topology_file='', radius=3.0, selection_method='internal',
+                                    ligand_name='LIG', input_structure_lig_name='LIG', gmx_bin='gmx', verbosity=0):
+    """ Adds the ligand ligand_molecule to the pre-solvated structure input_structure_file, relying on info from
     index_file. If provided, a topology file can be edited to reflect changes.
 
     :param all_classes.MergedTopologies ligand_molecule: molecule to be added
     :param str input_structure_file: pre-solvated structure pdb file
     :param str output_structure_file: saves full structure to this file
-    :param dict index_data: Gromacs-style index file (used to mark last protein atom from output_structure_file)
+    :param dict index_file: Gromacs-style index file (used to mark last protein atom from output_structure_file)
     :param str input_topology: if provided, edits this topology to adjust the number of SOL molecules
     :param str output_topology_file: save topology to this file
-    :param float radius: exclude water molecule this close to the ligand (default: 3.0 A)
+    :param float radius: exclude water molecules this close to the ligand (default: 3.0 A)
     :param str selection_method: use mdanalysis, sklearn or internal (default) selection method
     :param str ligand_name: use this as ligand name
     :param str input_structure_lig_name: remove this molecule from the input_structure_file. Default: LIG
@@ -2335,9 +2414,15 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     """
 
     # Get the index of the last protein atom from the index, ligand will be inserted after it
-    last_protein_atom = index_data['Protein'][-1]
+    try:
+        last_protein_atom = read_index_data(index_file, verbosity=arguments.verbose)['Protein'][-1]
+    except TypeError:
+        with tempfile.NamedTemporaryFile(suffix='.ndx') as tmpindexfile:
+            make_index(new_index_file=tmpindexfile.name, structure_data=input_structure_file, gmx_bin=gmx_bin,
+                       verbosity=verbosity)
+            last_protein_atom = read_index_data(tmpindexfile.name, verbosity=arguments.verbose)['Protein'][-1]
 
-    # Get the hydrid ligand as PDB
+    # Get the hybrid ligand as PDB
     # FIXME: remove the need for setting molecule_name
     dual_topology_pdb = ligand_molecule.to_pdb_block(molecule_name=ligand_name, verbosity=verbosity)
     dual_topology_pdb = all_classes.PDBFile(dual_topology_pdb.splitlines(keepends=True))
@@ -2363,57 +2448,86 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
     remove_atoms = []
     for each_atom in fullmd_data.atoms:
         if each_atom.resname.replace(' ', '') == input_structure_lig_name and each_atom not in dual_topology_pdb.atoms:
-            fullmd_data.file_lines[each_atom.line_num] = 'REMARK Atom {} {} {} suppressed, line {}\n' \
-                                                         ''.format(each_atom.name, each_atom.serial, each_atom.resname,
-                                                                   each_atom.line_num)
-            remove_atoms.append(each_atom)
-    for a in reversed(remove_atoms):
-        fullmd_data.atoms.remove(a)
+            each_atom.suppressed = True
 
     fullmd_data.update_atom_lines()
     fullmd_data.to_file(output_structure_file)
 
     # Remove clashing waters
     if selection_method == 'internal':
-        os_util.local_print('Internal selection method not implemented. Please, use selection_method=mdanalysis.',
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        # FIXME: implement this
-        dist_cmd = ["pairdist", "-n", "index_data", "-f", "input_structure_file", "-ref",
-                    "'\"{}\"'".format(ligand_name), "-sel", "'\"water\"'", "-refgrouping", "none",
-                    "-selgrouping", "none"]
-        # os_util.run_gmx
-        # d0 = np.reshape(d, [42, -1, 3])
-
-        raise SystemExit(1)
-    elif selection_method == 'sklearn':
-        from sklearn.metrics import pairwise_distances_argmin_min
         import numpy
+        # First generate a temp index.ndx, then run gmxpairdist
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            tmpindexfile = os.path.join(tmpdirname, 'index.ndx')
+            pairdistfile = os.path.join(tmpdirname, 'pairdist.xvg')
+            make_index(new_index_file=tmpindexfile, structure_data=output_structure_file, gmx_bin=gmx_bin,
+                       verbosity=verbosity)
+            # gmx pairdist requires a .tpr for -refgrouping or -selgrouping = mol or res (which would be more useful).
+            # Instead of generating a tpr here, we are just use group none and get the min distance below.
+            dist_cmd = ["pairdist", "-n", tmpindexfile, "-f", output_structure_file, "-ref",
+                        "{}".format(ligand_name), "-sel", "Water", "-refgrouping", "all",
+                        "-selgrouping", "none", '-o', pairdistfile]
+            os_util.run_gmx(gmx_bin, dist_cmd, verbosity=verbosity)
 
-        # Reads data from pdb and ligand atom positions
-        atom_dict_list = [{'line': line_number, 'atom_idx': int(line[6:11]), 'atom_name': int(line[12:16]),
-                           'atom_position': [float(line[30:38]), float(line[38:46]), float(line[46:54])]}
-                          for line_number, line in enumerate(input_structure_file)
-                          if (len(line) > 54 and line[0:4] == 'ATOM' or line[0:6] == 'HETATM')]
+            # Reads pairdist data from .xvg and input .pdb
+            xvg_data = all_classes.XVGData(pairdistfile)
+        pdbdata = all_classes.PDBFile(output_structure_file)
 
-        # Atom positions to a numpy array
-        pdb_atom_positions = numpy.asarray([each_atom['atom_position'] for each_atom in atom_dict_list])
-        lig_atom_positions = numpy.vstack([ligand_molecule.molecule_a.GetConformer().GetPositions(),
-                                           ligand_molecule.molecule_b.GetConformer().GetPositions()])
+        # Check consistency of the number of atoms in water residues
+        water_mol_data = [r for r in pdbdata.residues if r.guess_is_water()]
+        water_num_atoms = [len(r) for r in water_mol_data]
+        if len(set(water_num_atoms)) > 1:
+            os_util.local_print('Divergent atom counts for water molecules. I found the following number of atoms: '
+                                '{}. Check your presolvated input ({}).'
+                                ''.format(set(water_num_atoms), input_structure_file),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        elif len(set(water_num_atoms)) == 0:
+            os_util.local_print('No water molecules detected in your input. Check your presolvated input ({}).'
+                                ''.format(input_structure_file),
+                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            raise SystemExit(1)
+        else:
+            water_num_atoms = water_num_atoms[0]
 
-        # Find distance between all ligand atoms to all atoms of the system
-        closest, dist = pairwise_distances_argmin_min(pdb_atom_positions, lig_atom_positions)
+        # Get minimum distances from the data. Note that the first element is the timestep of the frame (0.0000)
+        # here. xvg_data.data[1:] is used to skip such value. radius / 10 to convert from angs to nm.
+        distances = xvg_data.data[1:].reshape([-1, water_num_atoms])
+        clashing_waters = numpy.argwhere(numpy.any(distances <= radius / 10.0, axis=1))
 
-        # Remove clashing waters
-        clashing_waters = 0
-        for each_atom, each_dist in closest[::-1], dist[::-1]:
-            if dist < radius and atom_dict_list[each_atom]['atom_idx']:
-                os_util.local_print('Atom {} would be removed. Atom data: {}'
-                                    ''.format(each_atom, atom_dict_list[each_atom]),
-                                    msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
-        os_util.local_print('sklearn selection method not implemented',
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
-        raise SystemExit(1)
-        # FIXME: implement this
+        for i in clashing_waters.flatten():
+            water_mol_data[int(i)][0].suppressed = False
+        pdbdata.to_file(output_file=output_structure_file)
+
+    # elif selection_method == 'sklearn':
+    #     from sklearn.metrics import pairwise_distances_argmin_min
+    #     import numpy
+    #
+    #     # Reads data from pdb and ligand atom positions
+    #     atom_dict_list = [{'line': line_number, 'atom_idx': int(line[6:11]), 'atom_name': int(line[12:16]),
+    #                        'atom_position': [float(line[30:38]), float(line[38:46]), float(line[46:54])]}
+    #                       for line_number, line in enumerate(input_structure_file)
+    #                       if (len(line) > 54 and line[0:4] == 'ATOM' or line[0:6] == 'HETATM')]
+    #
+    #     # Atom positions to a numpy array
+    #     pdb_atom_positions = numpy.asarray([each_atom['atom_position'] for each_atom in atom_dict_list])
+    #     lig_atom_positions = numpy.vstack([ligand_molecule.molecule_a.GetConformer().GetPositions(),
+    #                                        ligand_molecule.molecule_b.GetConformer().GetPositions()])
+    #
+    #     # Find distance between all ligand atoms to all atoms of the system
+    #     closest, dist = pairwise_distances_argmin_min(pdb_atom_positions, lig_atom_positions)
+    #
+    #     # Remove clashing waters
+    #     clashing_waters = 0
+    #     for each_atom, each_dist in closest[::-1], dist[::-1]:
+    #         if dist < radius and atom_dict_list[each_atom]['atom_idx']:
+    #             os_util.local_print('Atom {} would be removed. Atom data: {}'
+    #                                 ''.format(each_atom, atom_dict_list[each_atom]),
+    #                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+    #     os_util.local_print('sklearn selection method not implemented',
+    #                         msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+    #     raise SystemExit(1)
+    #     # FIXME: implement this
 
     elif selection_method == 'mdanalysis':
         import MDAnalysis
@@ -3227,7 +3341,7 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
 
     return perturbation_map
 
-
+@os_util.trace_function
 def align_ligands(receptor_structure, poses_input=None, poses_reference_structure=None, pose_loader='generic',
                   reference_pose_superimpose=None, superimpose_loader_ligands=None, ligand_residue_name='LIG',
                   cluster_docking_data=None, ligands_to_read=None, save_state=False, verbosity=0, **kwargs):
@@ -3712,21 +3826,14 @@ if __name__ == '__main__':
                             msg_verbosity=os_util.verbosity_level.info, current_verbosity=arguments.verbose)
 
     for each_arg in ['extradirs', 'extrafiles', 'water_mdp', 'complex_mdp']:
+        # Make sure some args are lists even when passing a str of Non, so they can be appended/extended latter on
         arguments[each_arg] = os_util.detect_type(arguments[each_arg], test_for_list=True, verbosity=arguments.verbose)
-        arguments[each_arg] = [arguments[each_arg]] if isinstance(arguments[each_arg], str) else arguments[each_arg]
-
-    if arguments.pre_solvated and not arguments.topology:
-        if arguments.no_checks:
-            os_util.local_print('You provided a pre-solvated structure, but did not provided a topology. Because '
-                                'you are running with no_checks, I will go on. You will need to edit the topology '
-                                'manually. Alternatively, use the topology input option',
-                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
+        if not arguments[each_arg]:
+            arguments[each_arg] = []
+        elif isinstance(arguments[each_arg], str):
+            arguments[each_arg] = [arguments[each_arg]]
         else:
-            os_util.local_print('You provided a pre-solvated structure, but did not provided a topology. Please, '
-                                'use the topology input option. Alternatively, you can run with no_checks to '
-                                'bypass this checking.',
-                                msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-            raise SystemExit(1)
+            arguments[each_arg] = arguments[each_arg]
 
     arguments.mdp_substitution = os_util.detect_type(arguments.mdp_substitution, test_for_dict=True)
     if arguments.mdp_substitution:
@@ -3867,27 +3974,6 @@ if __name__ == '__main__':
                                 ''.format(solute_scaling_list, solute_scaling_atoms_dict, scaling_bin),
                                 msg_verbosity=os_util.verbosity_level.debug, current_verbosity=arguments.verbose)
 
-    if arguments.pre_solvated:
-        index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
-        if not index_data:
-            os_util.local_print('Could not read index file {} and you supplied a pre-solvated system. I will generate '
-                                'one automatically using gmx make_ndx. If the script fails, supplying a previously '
-                                'generated index file may help. Note: a "Protein" group is expected in such file.'
-                                ''.format(arguments.index),
-                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
-            water_name = all_classes.TopologyData.detect_solute_molecule_name(
-                input_file=arguments.structure, test_sol_molecules=arguments.buildsys_water_mol_name,
-                gmx_bin=arguments.gmx_bin_local, no_checks=arguments.no_checks, verbosity=arguments.verbose
-            )
-            make_index(new_index_file=arguments.index, structure_data=arguments.structure, water_name=water_name,
-                       method=arguments.selection_method, gmx_bin=arguments.gmx_bin_local, verbosity=arguments.verbose)
-            index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
-
-        receptor_structure_mol = read_md_protein(arguments.structure, last_protein_atom=index_data['Protein'][-1],
-                                                 verbosity=arguments.verbose)
-    else:
-        receptor_structure_mol = pybel.readfile('pdb', arguments.structure).__next__()
-
     if arguments.parameterize:
         input_parameterize = all_classes.Namespace(param_type=arguments.parameterize,
                                                    executable=arguments.parameterize_bin,
@@ -3953,7 +4039,7 @@ if __name__ == '__main__':
         perturbation_graph = networkx.DiGraph()
         [perturbation_graph.add_edge(i, j, **data) for (i, j), data in perturbation_map.items()]
         progress_data['perturbation_map'] = perturbation_graph.copy()
-        progress_data['perturbation_map_{}'.format(time.strftime('%H%M%S_%d%m%Y'))] = perturbation_graph.copy()
+        progress_data['perturbation_map_{}'.format(os_util.date_fmt())] = perturbation_graph.copy()
 
     else:
         perturbation_graph = progress_data.get('perturbation_map', None)
@@ -3987,7 +4073,7 @@ if __name__ == '__main__':
                 if maptype in ['star', 'wheel']:
                     progress_data['center_molecule'] = progress_data['thermograph']['bias']
                 progress_data['perturbation_map'] = perturbation_graph.copy()
-                progress_data['perturbation_map_{}'.format(time.strftime('%H%M%S_%d%m%Y'))] = perturbation_graph.copy()
+                progress_data['perturbation_map_{}'.format(os_util.date_fmt())] = perturbation_graph.copy()
 
                 os_util.local_print('Pertubation map read from thermograph.best_solution in {}. Graph:\n\t{}'
                                     ''.format(progress_data.data_file, perturbation_graph.edges),
@@ -4015,25 +4101,8 @@ if __name__ == '__main__':
      for mol_a, mol_b in perturbation_map]
     os_util.local_print('=' * 50, msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
 
-    # Reads poses data. If a custom MCS was supplied as str (ie, all MCS should custom), use it during pose loading.
-    # Otherwise, user wants only specific pairs (of ligands) to use a custom MCS, so use find_mcs during pose loading.
-    poses_mcs = custom_mcs_data if isinstance(custom_mcs_data, str) else None
-    poses_mol_data = align_ligands(receptor_structure_mol, poses_input,
-                                   poses_reference_structure=arguments.poses_reference_structure,
-                                   reference_pose_superimpose=arguments.poses_reference_pose_superimpose,
-                                   superimpose_loader_ligands=ligands_dict,
-                                   ligands_to_read=[mol_a for mol_a, mol_b in perturbation_map],
-                                   pose_loader=arguments.pose_loader, mcs=poses_mcs, save_state=progress_data,
-                                   verbosity=arguments.verbose, **arguments.poses_advanced_options)
-
-    if not poses_mol_data:
-        os_util.local_print('Failed during the align ligands step. Cannot continue.',
-                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
-
-        raise SystemExit(-1)
-
     original_base_pert_dir = arguments.perturbations_dir if arguments.perturbations_dir \
-        else 'perturbations_{}'.format(time.strftime('%H%M%S_%d%m%Y'))
+        else 'perturbations_{}'.format(os_util.date_fmt())
 
     if not arguments.output_hidden_temp_dir:
         # User don't want a tempdir in tmpfs, use a fake tempdir in pwd instead. cleanup is lambda: None so it won't be
@@ -4046,6 +4115,136 @@ if __name__ == '__main__':
     else:
         # Using a regular temp dir
         tmpdir = tempfile.TemporaryDirectory()
+
+    if arguments.pre_solvated:
+
+        if not os.path.isfile(arguments.topology):
+            # User is using a pre-solvated system, but did not provide a topology. Try to generate one using gmx pdb2gmx
+
+            os_util.local_print('You provided a pre-solvated structure, but did not provided a topology. '
+                                'Trying to generate a topology using gmx pdb2gmx.',
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
+
+            pdb2gmx_output = 'build_system_{}.pdb'.format(os_util.date_fmt())
+            # Assemble the pdb2gmx command line and stdin
+            communicate_str = ''
+            prepare_top = ['pdb2gmx', '-f', arguments.structure,
+                           # Output topology filename will be taken from args, so arguments.topology will exist
+                           '-p', arguments.topology,
+                           '-o', pdb2gmx_output]
+
+            # Force field and water selection follows the logic in prepare_complex_system
+            try:
+                forcefield_str = int(arguments.buildsys_forcefield)
+            except ValueError:
+                prepare_top.extend(['-ff', arguments.buildsys_forcefield])
+            else:
+                communicate_str += '{}\n'.format(forcefield_str)
+
+            if arguments.buildsys_water is not None:
+                prepare_top.extend(['-water', arguments.buildsys_water])
+            else:
+                communicate_str += '1\n'
+
+            return_data = os_util.run_gmx(gmx_bin=arguments.gmx_bin_local, arg_list=prepare_top,
+                                          input_data=communicate_str,
+                                          die_on_error=False, verbosity=arguments.verbose)
+
+            if return_data.code != 0:
+                # gmx pdb2gmx failed, cannot continue
+                if re.findall('Residue .+ not found in residue topology database', return_data.stderr):
+                    os_util.local_print('gmx pdb2gmx failed. Output was:\n\n{}\n\nError was:\n\n{}\n\n'
+                                        'You provided a pre-solvated structure, but did not provided a topology. '
+                                        'Automated topology generation using gmx pdb2gmx failed. Cannot go on. It '
+                                        'seems parameters for one (or more) of the residues in the PDB is not present '
+                                        'in the FF. This is likely because there is a ligand, cofactor, etc, for which '
+                                        'parameters were generated. Either check your input system ({}) or supply a '
+                                        'topology (--topology). NOTE: In case the only small molecule in your PDB is '
+                                        'the ligand, it *may* be safe to remove those atoms and try again.'
+                                        ''.format(return_data.stdout, return_data.stderr, arguments.structure),
+                                        msg_verbosity=os_util.verbosity_level.error,
+                                        current_verbosity=arguments.verbose)
+                else:
+                    os_util.local_print('gmx pdb2gmx failed. Output was:\n\n{}\n\nError was:\n\n{}\n\n'
+                                        'You provided a pre-solvated structure, but did not provided a topology. '
+                                        'Automated topology generation using gmx pdb2gmx failed. Cannot go on. Either '
+                                        'check your input system ({}) or supply a topology (--topology).'
+                                        ''.format(return_data.stdout, return_data.stderr, arguments.structure),
+                                        msg_verbosity=os_util.verbosity_level.error,
+                                        current_verbosity=arguments.verbose)
+                raise SystemExit(1)
+
+            # pdb2gmx reorder atoms, so now we must update the system (user input file is not touched)
+            original_struct, arguments.structure = arguments.structure, pdb2gmx_output
+
+            # Position restraints and chain topologies (if any) must be copied to the rundirs. We use the extrafiles
+            # to do that.
+            copyfiles = build_posres_and_chain_itp(
+                input_topology=arguments.topology,
+                input_pdb=arguments.structure,
+                output_topology=arguments.topology,
+                workdir=tmpdir.name,
+                gmx_bin=arguments.gmx_bin_local,
+                no_checks=arguments.no_checks,
+                verbosity=arguments.verbose
+            )
+            arguments.extrafiles.extend(copyfiles.keys())
+
+            converted_pdb = all_classes.PDBFile(arguments.structure)
+            for each_residue in converted_pdb.residues:
+                if each_residue.guess_is_water():
+                    each_residue.resname = 'SOL'
+                    each_residue.update_atoms()
+            converted_pdb.to_file(arguments.structure)
+
+            os_util.local_print('Generated a topology ({}) and a processed solvated system ({}) for the input'
+                                ' {}.'.format(arguments.topology, arguments.structure, original_struct),
+                                msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
+
+        index_data = read_index_data(arguments.index, verbosity=arguments.verbose)
+        if not index_data:
+            os_util.local_print('Could not read index file {} and you supplied a pre-solvated system. I will generate '
+                                'one automatically using gmx make_ndx. If the script fails, supplying a previously '
+                                'generated index file may help. Note: a "Protein" group is expected in such file.'
+                                ''.format(arguments.index),
+                                msg_verbosity=os_util.verbosity_level.warning, current_verbosity=arguments.verbose)
+            water_name = all_classes.TopologyData.detect_solute_molecule_name(
+                input_file=arguments.structure, test_sol_molecules=arguments.buildsys_water_mol_name,
+                gmx_bin=arguments.gmx_bin_local, no_checks=arguments.no_checks, verbosity=arguments.verbose
+            )
+            with tempfile.NamedTemporaryFile(suffix='.ndx') as tmpfile:
+                make_index(new_index_file=tmpfile.name, structure_data=arguments.structure, water_name=water_name,
+                           method=arguments.selection_method, gmx_bin=arguments.gmx_bin_local,
+                           verbosity=arguments.verbose)
+                index_data = read_index_data(tmpfile.name, verbosity=arguments.verbose)
+
+        receptor_structure_mol = read_md_protein(arguments.structure, last_protein_atom=index_data['Protein'][-1],
+                                                 verbosity=arguments.verbose)
+    else:
+        receptor_structure_mol = pybel.readfile('pdb', arguments.structure).__next__()
+
+    # Reads poses data. If a custom MCS was supplied as str (ie, all MCS should custom), use it during pose loading.
+    # Otherwise, user wants only specific pairs (of ligands) to use a custom MCS, so use find_mcs during pose loading.
+    poses_mcs = custom_mcs_data if isinstance(custom_mcs_data, str) else None
+    poses_mol_data = align_ligands(
+        receptor_structure=receptor_structure_mol,
+        poses_input=poses_input,
+        poses_reference_structure=arguments.poses_reference_structure,
+        reference_pose_superimpose=arguments.poses_reference_pose_superimpose,
+        superimpose_loader_ligands=ligands_dict,
+        ligands_to_read=[mol_a for mol_a, mol_b in perturbation_map],
+        pose_loader=arguments.pose_loader,
+        mcs=poses_mcs,
+        save_state=progress_data,
+        verbosity=arguments.verbose,
+        **arguments.poses_advanced_options
+    )
+
+    if not poses_mol_data:
+        os_util.local_print('Failed during the align ligands step. Cannot continue.',
+                            msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
+
+        raise SystemExit(-1)
 
     base_pert_dir = os.path.join(tmpdir.name, original_base_pert_dir)
     os_util.makedir(base_pert_dir, verbosity=arguments.verbose)
@@ -4072,22 +4271,26 @@ if __name__ == '__main__':
     os_util.local_print('{:=^50}\n{} {} {}'.format(' Working on pairs ', 'Perturbation', 'Pose', 'Coordinates'),
                         msg_verbosity=os_util.verbosity_level.default, current_verbosity=arguments.verbose)
 
-    output_data = prepare_output_scripts_data(header_template=arguments.output_template,
-                                              script_type=arguments.output_scripttype,
-                                              submission_args=arguments.output_submit_args,
-                                              custom_scheduler_resources=arguments.output_resources,
-                                              additional_options=arguments.output_additional_options,
-                                              hrex_frequency=arguments.hrex,
-                                              collect_type=os_util.detect_type(arguments.output_collecttype,
-                                                                               test_for_list=True),
-                                              temperature=arguments.md_temperature,
-                                              gmx_bin=arguments.gmx_bin_run,
-                                              index_file=arguments.index,
-                                              n_jobs=arguments.output_njobs,
-                                              run_before=arguments.output_runbefore,
-                                              run_after=arguments.output_runafter,
-                                              scripts_templates=arguments.internal.default['output_files_data'],
-                                              verbosity=arguments.verbose)
+    output_data = prepare_output_scripts_data(
+        header_template=arguments.output_template,
+        script_type=arguments.output_scripttype,
+        submission_args=arguments.output_submit_args,
+        custom_scheduler_resources=arguments.output_resources,
+        additional_options=arguments.output_additional_options,
+        hrex_frequency=arguments.hrex,
+        collect_type=os_util.detect_type(
+            arguments.output_collecttype,
+            test_for_list=True
+        ),
+        temperature=arguments.md_temperature,
+        gmx_bin=arguments.gmx_bin_run,
+        index_file=arguments.index,
+        n_jobs=arguments.output_njobs,
+        run_before=arguments.output_runbefore,
+        run_after=arguments.output_runafter,
+        scripts_templates=arguments.internal.default['output_files_data'],
+        verbosity=arguments.verbose
+    )
 
     # This will be the generated script data
     output_script_list = [output_data['shebang'], '', 'lastjid=()']

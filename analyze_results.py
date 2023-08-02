@@ -1796,7 +1796,7 @@ if __name__ == '__main__':
                                 current_verbosity=arguments.verbose,
                                 msg_verbosity=os_util.verbosity_level.default)
 
-    saved_data['perturbation_map_{}'.format(time.strftime('%H%M%S_%d%m%Y'))] = saved_data['perturbation_map'].copy()
+    saved_data['perturbation_map_{}'.format(os_util.date_fmt())] = saved_data['perturbation_map'].copy()
 
     if arguments.progress_file is not None:
         if 'no_progress' in saved_data:

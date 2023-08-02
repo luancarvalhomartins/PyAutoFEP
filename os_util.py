@@ -29,11 +29,17 @@ from io import TextIOBase
 from collections import namedtuple
 import traceback
 from ast import literal_eval
+import time
 
 import rdkit.Chem
 
 verbosity_level = namedtuple("VerbosityLevel",
                              "error default warning info debug extra_debug timing")(-1, 0, 1, 2, 3, 4, 5)
+
+
+def date_fmt():
+    """ Returns a formatted date and time string """
+    return time.strftime('%H%M%S_%d%m%Y')
 
 
 def makedir(dir_name, error_if_exists=False, parents=False, verbosity=0):
@@ -54,8 +60,8 @@ def makedir(dir_name, error_if_exists=False, parents=False, verbosity=0):
         except OSError as error:
             if error.errno == 17:
                 if error_if_exists:
-                    local_print('Directory {} exists (and makedir was called with error_if_exists=True).'.format(dir_name),
-                                msg_verbosity=verbosity_level.error, current_verbosity=verbosity)
+                    local_print('Directory {} exists (and makedir was called with error_if_exists=True).'
+                                ''.format(dir_name), msg_verbosity=verbosity_level.error, current_verbosity=verbosity)
                     raise SystemExit(1)
             else:
                 local_print('Could not create directory {}. Error was {}'.format(dir_name, error),
@@ -145,7 +151,7 @@ def run_gmx(gmx_bin, arg_list, input_data='', output_file=None, alt_environment=
 
     gmx_handler = subprocess.Popen(final_arg_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    stdin=subprocess.PIPE, universal_newlines=True, env=this_env, cwd=cwd)
-    if input_data != '':
+    if input_data:
         stdout, stderr = gmx_handler.communicate(input_data)
     else:
         stdout, stderr = gmx_handler.communicate()
@@ -507,6 +513,8 @@ def parse_simple_config_file(input_data, verbosity=0):
 
 
 from functools import wraps
+
+
 def _get_scope(f, args):
     """Get scope name of given function."""
     from inspect import getmodule
@@ -524,8 +532,9 @@ def _get_scope(f, args):
     return _scope
 
 
-def trace(f):
+def trace_function(f):
     """Display argument and context call information of given function."""
+
     @wraps(f)
     def wrap_trace(*args, **kwargs):
         formatted_args = []
@@ -547,10 +556,11 @@ def trace(f):
         local_print("Entering {} with: {} {}".format(_get_scope(f, args), formatted_args, kwargs),
                     msg_verbosity=verbosity_level.debug, current_verbosity=kwargs.get('verbosity', 1))
         return f(*args, **kwargs)
+
     return wrap_trace
 
 
-def time(f):
+def time_function(f):
     """ Time the execution of a function """
     from time import perf_counter
     @wraps(f)

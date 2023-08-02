@@ -43,7 +43,7 @@ def align_sequences_match_residues(mobile_seq, target_seq, seq_align_mat='BLOSUM
         from Bio.Align import substitution_matrices
         seq_align_mat = substitution_matrices.load(seq_align_mat)
     except ImportError as error:
-        os_util.local_print('Failed to import Biopython with error: {}\nBiopython is necessary to sequence'
+        os_util.local_print('Failed to import Biopython with error: {}\nBiopython is necessary for sequence '
                             'alignment. Sequences to be aligned:\nReference: {}\nMobile: {}'
                             ''.format(error, target_seq, mobile_seq),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
@@ -106,24 +106,33 @@ def get_position_matrix(each_mol, each_mol_str=None, atom_selection=None, verbos
     return return_list
 
 
+@os_util.trace_function
 def align_protein(mobile_mol, reference_mol, align_method='openbabel', seq_align_mat='BLOSUM80',
                   gap_penalty=-1, verbosity=0):
-    """ Align mobile_mol to reference_mol using method defined in align_method. Defaults to openbabel.OBAlign, which is
+    """
+    Align mobile_mol to reference_mol using method defined in align_method. Defaults to openbabel.OBAlign, which is
     fastest. rdkit's GetAlignmentTransform is much slower and may not work on larger systems.
 
-    :param [rdkit.RWMol, pybel.Molecule] reference_mol: molecule to be used as alignment reference
-    :param [rdkit.RWMol, pybel.Molecule] mobile_mol: rdkit.RWMol molecule to be aligned
-    :param str align_method: method to be used, options are 'openbabel', 'rdkit'
-    :param str seq_align_mat: use this matrix to sequence alignment, only used if sequences differ. Any value from
-                                    Bio.SubsMat.MatrixInfo
-    :param float gap_penalty: use this gap penalty to sequence alignment, only used if sequences differ.
-    :param int verbosity: be verbosity
-    :rtype: dict
-    """
+    Parameters
+    ----------
+    reference_mol : [rdkit.RWMol, pybel.Molecule]
+        molecule to be used as alignment reference
+    mobile_mol : [rdkit.RWMol, pybel.Molecule]
+        rdkit.RWMol molecule to be aligned
+    align_method : str
+        method to be used, options are 'openbabel', 'rdkit'
+    seq_align_mat : str
+        use this matrix to sequence alignment, only used if sequences differ. Any value from Bio.SubsMat.MatrixInfo will
+        work
+    gap_penalty : float
+        use this gap penalty to sequence alignment, only used if sequences differ.
+    verbosity : int
+        be verbosity
 
-    os_util.local_print('Entering align_protein(mobile_mol={}, reference_mol={}, align_method={}, verbosity={})'
-                        ''.format(mobile_mol.title, reference_mol.title, align_method, verbosity),
-                        msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
+    Returns
+    -------
+    dict
+    """
 
     if align_method == 'rdkit':
         # Uses rdkit.Chem.rdMolAlign.GetAlignmentTransform to align mobile_mol to reference_mol
