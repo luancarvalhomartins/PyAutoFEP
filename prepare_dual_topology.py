@@ -4407,10 +4407,11 @@ if __name__ == '__main__':
 
             # Align ligand
             add_ligand_to_solvated_receptor(merged_data, arguments.structure,
-                                            output_structure_file=this_struct_file, index_data=index_data,
+                                            output_structure_file=this_struct_file, index_file=arguments.index,
                                             input_topology=arguments.topology, output_topology_file=this_top_file,
                                             radius=arguments.presolvated_radius,
-                                            selection_method=arguments.selection_method, verbosity=arguments.verbose)
+                                            selection_method=arguments.selection_method,
+                                            verbosity=arguments.verbose)
 
             # FIXME: run genion here to neutralize the system in a case a user supply a system with a different charge
             #  than the sun system (this should be uncommon)
