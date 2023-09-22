@@ -52,7 +52,6 @@ import mol_util
 import merge_topologies
 import os_util
 
-
 SPECIAL_SUBSTITUTIONS = '_LENGTH', '_TEMPERATURE', '_PRESSURE'
 
 
@@ -123,6 +122,19 @@ def guess_water_box(solvent_box, pdb2gmx_topology='', verbosity=0):
             os_util.local_print('You asked me to use a water box for water molecules with "{}" points, but I cannot do '
                                 'so. I can only use the following boxes: "{}". Cannot continue. If this is what your '
                                 'really want, you will need a pre-solvated system.'
+                                ''.format(solvent_box, ', '.join(['{} ({} points)'.format(j, i)
+                                                                  for i, j in water_box_data_numeric.items()])),
+                                current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
+            raise SystemExit(-1)
+    else:
+        for water_model_box, water_model_top in water_box_data.items():
+            if solvent_box in water_model_top or os.path.splitext(solvent_box)[0] in [os.path.splitext(i)[0] for i in
+                                                                                      water_model_top]:
+                solvent_box = water_model_box
+                break
+        else:
+            os_util.local_print('Could not understand the input water model "{}". I can only use the following boxes: '
+                                '"{}". Cannot continue. Check your input data (eg, buildsys_water).'
                                 ''.format(solvent_box, ', '.join(['{} ({} points)'.format(j, i)
                                                                   for i, j in water_box_data_numeric.items()])),
                                 current_verbosity=verbosity, msg_verbosity=os_util.verbosity_level.error)
@@ -328,8 +340,8 @@ def build_posres_and_chain_itp(input_topology, input_pdb, file_names_data=None, 
 
         # Generate and the add position restraints for protein Ca and backbone
         for this_filename, restr_group, resrt_define in (
-            (file_names_data['posres_ca_top'].format('singlechain'), 'C-alpha', 'POSRES_PROTEIN_CA'),
-            (file_names_data['posres_backbone_top'].format('singlechain'), 'Backbone', 'POSRES_PROTEIN_BB')
+                (file_names_data['posres_ca_top'].format('singlechain'), 'C-alpha', 'POSRES_PROTEIN_CA'),
+                (file_names_data['posres_backbone_top'].format('singlechain'), 'Backbone', 'POSRES_PROTEIN_BB')
         ):
             restrt_list = ['genrestr', '-f', input_pdb, '-o', this_filename]
             os_util.run_gmx(gmx_bin, restrt_list, f'{restr_group}\n', verbosity=verbosity)
@@ -678,7 +690,7 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
     )
 
     # 3. Generate simulation box (gmx editconf) and solvate the complex (gmx solvate)
-    box_size = solvate_data['water_shell'] / 10.0     # angstrom -> nm
+    box_size = solvate_data['water_shell'] / 10.0  # angstrom -> nm
     if box_size < 1.0:
         os_util.local_print('You selected a water shell smaller than 10 \u00C5. Note that length units in '
                             'input files are \u00C5.',
@@ -798,7 +810,8 @@ def prepare_complex_system(structure_file, base_dir, ligand_dualmol, topology='F
         shutil.copy2(each_source, os.path.join(base_dir, 'protein', each_dest))
 
     return all_classes.Namespace({'build_dir': build_system_dir, 'structure': output_structure_file,
-                                  'topology': output_topology_file, 'water_name': water_name})
+                                  'topology': output_topology_file, 'water_name': water_name,
+                                  'index': build_files_dict['index_ndx']})
 
 
 def prepare_output_scripts_data(header_template=None, script_type='bash', submission_args=None,
@@ -1199,7 +1212,7 @@ def parse_input_molecules(input_data, verbosity=0):
                     except KeyError:
                         os_util.local_print('Failed to parse the auxiliary SMILES file {} at line {}. I will ignore it '
                                             'and try to go on.'
-                                            ''.format(each_file, n+2),
+                                            ''.format(each_file, n + 2),
                                             msg_verbosity=os_util.verbosity_level.warning, current_verbosity=verbosity)
                     else:
                         if mol_name in smiles_data and smiles_data[mol_name] != each_line.split()[1]:
@@ -1772,14 +1785,24 @@ def read_index_data(index_file, verbosity=0):
         return None
 
 
-def uniquify_index_file(filename, verbosity=0):
-    """ Edits an index file, removing duplicated groups. Warning: will edit in place
+def edit_index_file(filename, index_data=None, verbosity=0):
+    """ Edits an index file, but default just process the file and uniquify groups. Warning: will edit in place
 
-    :param str filename: file to be edited
-    :param int verbosity: verbosity level
+    Parameters
+    ----------
+    filename : str
+        GROMACS-compatible index file. WARNING: if file exists, it will be edited in place.
+    index_data : dict
+        Save this data to the file. By deafult, will read the data from the input file.
+    verbosity
     """
 
-    index_data = read_index_data(filename, verbosity=verbosity)
+    if index_data is None:
+        index_data = read_index_data(filename, verbosity=verbosity)
+        if index_data is None:
+            os_util.local_print("uniquify_index_file requires either filename or index_data, but both are None.")
+            raise ValueError
+
     output = []
     for name, atoms in index_data.items():
         output.append('[ {} ]'.format(name))
@@ -1854,7 +1877,7 @@ def read_md_protein(structure_file, structure_format='', last_protein_atom=-1, v
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
         else:
-            msg_string = '\n'.join(['{:=^30}'.format(' MD Data '), 'Loaded data from file {} using format {}'
+            msg_string = '\n'.join(['{:=^50}'.format(' MD Data '), 'Loaded data from file {} using format {}'
                                                                    ''.format(structure_file, structure_format)])
             os_util.local_print(msg_string, msg_verbosity=os_util.verbosity_level.default, current_verbosity=verbosity)
             protein_data.data['file_path'] = structure_file
@@ -1976,7 +1999,7 @@ def make_index(new_index_file, structure_data, index_data=None, method='internal
                             alt_environment={'GMX_MAXBACKUP': '-1'})
 
             # Then uniquify its names
-            uniquify_index_file(new_index_file, verbosity=verbosity)
+            edit_index_file(new_index_file, verbosity=verbosity)
 
             # FIXME: this ignores custom names provided by the user
             # Now add the groups
@@ -2105,6 +2128,7 @@ def str_to_gmx(str_file, mol2_file, mol_name='LIG', force_field_dir=None, output
                 return return_data
 
 
+@os_util.trace_function
 def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein_topology_files, solvate_data=None,
                          protein_dir=None, gmx_bin='gmx', ligand_name='LIG', water_name='SOL', gmx_maxwarn=1,
                          no_checks=False, verbosity=0, **kwargs):
@@ -2266,13 +2290,29 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
         with open(build_files_dict['ligandsolv_top'], 'w') as fh:
             fh.writelines(topology_data)
 
+        # Set all residue names for water molecules to water_name
+        converted_pdb = all_classes.PDBFile(build_files_dict['ligandsolv_pdb'])
+        converted_pdb.set_water_res_name(new_res_name=water_name)
+        converted_pdb.to_file(build_files_dict['ligandsolv_pdb'])
+
+        os_util.local_print('Your are using {} as the molecule name for water. Because of that, the residue name of '
+                            'the water in the topology ({}) and structure ({}) files.'
+                            ''.format(water_name,
+                                      build_files_dict['ligandsolv_top'],
+                                      build_files_dict['ligandsolv_pdb']),
+                            msg_verbosity=os_util.verbosity_level.info, current_verbosity=verbosity)
+
     # Prepare a tpr to genion
-    grompp_list = ['grompp', '-f', build_files_dict['genion_mdp'],
-                   '-c', build_files_dict['ligandsolv_pdb'], '-p', build_files_dict['ligandsolv_top'],
-                   '-o', build_files_dict['genion_tpr'], '-maxwarn', str(gmx_maxwarn),
+    grompp_list = ['grompp',
+                   '-f', build_files_dict['genion_mdp'],
+                   '-c', build_files_dict['ligandsolv_pdb'],
+                   '-p', build_files_dict['ligandsolv_top'],
+                   '-o', build_files_dict['genion_tpr'],
+                   '-maxwarn', str(gmx_maxwarn),
                    '-po', build_files_dict['mdout_mdp']]
     gmx_data = os_util.run_gmx(gmx_bin, grompp_list, '', build_files_dict['grompp_log'], verbosity=verbosity,
                                die_on_error=False)
+
     if gmx_data.code != 0:
         if re.findall('number of coordinates in coordinate file', gmx_data.stderr):
             os_util.local_print('Failed to run {} {}. Error code {}.\nCommand line was: {}\n\nstdout:\n{}\n\n'
@@ -2290,16 +2330,55 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                                           gmx_data.stdout, gmx_data.stderr),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
             raise SystemExit(1)
-    # Run genion
-    shutil.copy2(build_files_dict['ligandsolv_top'], build_files_dict['fullsystem_top'])
-    genion_list = ['genion', '-s', build_files_dict['genion_tpr'], '-p', build_files_dict['fullsystem_top'],
-                   '-o', build_files_dict['fullsystem_pdb'], '-pname', solvate_data['pname'], '-nname',
-                   solvate_data['nname'], '-conc', str(solvate_data['ion_concentration']), '-neutral']
 
-    water_name = all_classes.TopologyData.detect_solute_molecule_name(input_file=build_files_dict['genion_tpr'],
-                                                                      test_sol_molecules=water_name,
-                                                                      gmx_bin=gmx_bin, no_checks=no_checks,
-                                                                      verbosity=verbosity)
+    # Prepare an index file
+    make_index(
+        new_index_file=build_files_dict['index_ndx'],
+        structure_data=build_files_dict['genion_tpr'],
+        gmx_bin=gmx_bin,
+        method=kwargs.get("method", 'internal'),
+        verbosity=verbosity
+    )
+
+    if water_name != 'SOL':
+        # In case the water_name is not SOL, edit the index file to set the name of the group
+        index_data = read_index_data(build_files_dict['index_ndx'], verbosity=verbosity)
+
+        if water_name not in index_data:
+            try:
+                index_data[water_name] = index_data['Water']
+            except KeyError as error:
+                os_util.local_print('Failed to edit index file {}. Water group not found. This file was prepared '
+                                    'from {}.'
+                                    ''.format(build_files_dict['index_ndx'], build_files_dict['genion_tpr']),
+                                    msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                raise KeyError(error)
+
+        # Try to remove the SOL group, in case it exists
+        try:
+            del index_data['SOL']
+        except KeyError:
+            pass
+
+        edit_index_file(
+            filename=build_files_dict['index_ndx'],
+            index_data=index_data,
+            verbosity=verbosity
+        )
+
+    # Prepare data to run genion, build_files_dict['fullsystem_top'] is edited in place
+    shutil.copy2(build_files_dict['ligandsolv_top'], build_files_dict['fullsystem_top'])
+    genion_list = ['genion',  # gmx command
+                   '-s', build_files_dict['genion_tpr'],  # Input structure file (tpr)
+                   '-p', build_files_dict['fullsystem_top'],  # Topology to be edited
+                   '-o', build_files_dict['fullsystem_pdb'],  # Save system with ions added to this
+                   '-pname', solvate_data['pname'],  # Name of the positive ion (default: NA)
+                   '-nname', solvate_data['nname'],  # Name of the negative ion (default: CL)
+                   '-conc', str(solvate_data['ion_concentration']),  # Set concentration of the ions (default: 0.15M)
+                   '-n', build_files_dict['index_ndx'],  # GROMACS-compatible index file
+                   '-neutral']  # And also neutralize the system
+
+    # Run gmx genion
     os_util.run_gmx(gmx_bin, genion_list, '{}\n'.format(water_name), build_files_dict['genion_log'],
                     alt_environment={'GMX_MAXBACKUP': '-1'}, verbosity=verbosity)
 
@@ -2338,7 +2417,8 @@ def prepare_water_system(dual_molecule_ligand, water_dir, topology_file, protein
                             msg_verbosity=os_util.verbosity_level.debug, current_verbosity=verbosity)
 
     return all_classes.Namespace({'topology': build_files_dict['fullsystem_top'],
-                                  'structure': build_files_dict['fullsystemcenter_pdb']})
+                                  'structure': build_files_dict['fullsystemcenter_pdb'],
+                                  'index': build_files_dict['index_ndx']})
 
 
 def create_fep_dirs(dir_name, base_pert_dir, new_files=None, extra_dir=None, extra_files=None, verbosity=0):
@@ -2477,10 +2557,18 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
         water_mol_data = [r for r in pdbdata.residues if r.guess_is_water()]
         water_num_atoms = [len(r) for r in water_mol_data]
         if len(set(water_num_atoms)) > 1:
+            dump_pdb = 'processed_system_{}.pdb'.format(os_util.date_fmt())
+            pdbdata.to_file(dump_pdb)
             os_util.local_print('Divergent atom counts for water molecules. I found the following number of atoms: '
-                                '{}. Check your presolvated input ({}).'
-                                ''.format(set(water_num_atoms), input_structure_file),
+                                '{}. Check your presolvated input ({}). Dumping processed PDB file to {}.'
+                                ''.format(set(water_num_atoms), input_structure_file, dump_pdb),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+            for each_atom_count in set(water_num_atoms):
+                print('These are the first water molecules containing {} atoms: {}'
+                      ''.format(each_atom_count,
+                                ', '.join(['Residue {}, lines {}, atoms {}'
+                                           ''.format(r.resname, r.lines, r.get_atoms_desc())
+                                           for r in water_mol_data if len(r) == each_atom_count][:5])))
             raise SystemExit(1)
         elif len(set(water_num_atoms)) == 0:
             os_util.local_print('No water molecules detected in your input. Check your presolvated input ({}).'
@@ -2566,7 +2654,23 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
                                     'especially force field.'.format(input_topology),
                                     msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
                 raise SystemExit(1)
-        [topology_data.insert(position + 2, each_line) for each_line in ligatoms_list]
+
+            for each_line in topology_data[position + 1:]:
+                position += 1
+                if len(each_line) == 1 or each_line.lstrip()[0] in [';']:
+                    continue
+                try:
+                    int(each_line.lstrip()[0])
+                except ValueError:
+                    os_util.local_print('Failed to parse the [ deafults ] directive in topology file {}. '
+                                        'This suggests a problem in topology file formatting. Please, check inputs, '
+                                        'especially force field.'.format(input_topology),
+                                        msg_verbosity=os_util.verbosity_level.error, current_verbosity=verbosity)
+                    raise SystemExit(1)
+                else:
+                    break
+
+        [topology_data.insert(position + 1, each_line) for each_line in ligatoms_list]
 
     fn_match_lig = re.compile(r'#include\s+\"ligand\.itp\"', flags=re.IGNORECASE).match
     if os_util.inner_search(fn_match_lig, topology_data, apply_filter=';') is False:
@@ -2584,7 +2688,7 @@ def add_ligand_to_solvated_receptor(ligand_molecule, input_structure_file, outpu
         [topology_data.insert(position - 1, each_line) for each_line in ligtop_list]
 
     fn_match = re.compile(r"\[\s+molecules\s+].*", re.IGNORECASE).match
-    fn_match_prot = re.compile(r"Protein", re.IGNORECASE).match
+    fn_match_prot = re.compile(r"Protein|system", re.IGNORECASE).match
     lnum = os_util.inner_search(fn_match, topology_data,
                                 apply_filter=lambda l: any([l.lstrip().startswith(i) for i in [';']]))
 
@@ -3260,7 +3364,8 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
     elif isinstance(perturbation_map_input, (list, tuple)):
         if all([isinstance(each_element, (list, tuple)) and len(each_element) == 2
                 for each_element in perturbation_map_input]):
-            perturbation_map_input = {(i, j): dict() for each_element in perturbation_map_input for i, j in each_element}
+            perturbation_map_input = {(i, j): dict() for each_element in perturbation_map_input for i, j in
+                                      each_element}
         elif len(perturbation_map_input) % 2 == 0:
             perturbation_map_input = {(i, j): dict() for i, j
                                       in zip(perturbation_map_input[0::2], perturbation_map_input[1::2])}
@@ -3340,6 +3445,7 @@ def process_perturbation_map(perturbation_map_input, verbosity=0):
             raise TypeError('str or tuple expected, got {} instead'.format(type(k)))
 
     return perturbation_map
+
 
 @os_util.trace_function
 def align_ligands(receptor_structure, poses_input=None, poses_reference_structure=None, pose_loader='generic',
@@ -3726,7 +3832,8 @@ if __name__ == '__main__':
         pybel.ob.obErrorLog.SetOutputLevel(pybel.ob.obError)
 
     if arguments.perturbations_dir:
-        if os.path.exists(arguments.perturbations_dir) and arguments.output_packing == 'dir':
+        if os.path.exists(arguments.perturbations_dir) and \
+                (arguments.output_packing == 'dir' or arguments.output_hidden_temp_dir is False):
             if not arguments.no_checks:
                 os_util.local_print('Output directory "{}" exists. Cannot continue. Remove/rename {} or use another '
                                     'perturbations_dir. Alternatively, you can rerun with no_checks, so I will '
@@ -3766,10 +3873,10 @@ if __name__ == '__main__':
 
     if not arguments.gmx_bin_run.endswith('_mpi'):
         if not arguments.no_checks:
-            os_util.local_print('Your gmx_bin_run does not seem to be a MPI-enabled GROMACS binary (i.e., it does not '
-                                'end with _mpi). An MPI-enabled GROMACS binary is required for FEP run. Therefore, I '
-                                'will not go on. Your arguments.gmx_bin_run is "{}".'
-                                ''.format(arguments.arguments.gmx_bin_run),
+            os_util.local_print('Your `gmx_bin_run` does not seem to be a MPI-enabled GROMACS binary (i.e., it does '
+                                'not end with _mpi). An MPI-enabled GROMACS binary is required for FEP run. '
+                                'Therefore, I will not go on. Your `gmx_bin_run` is "{}".'
+                                ''.format(arguments.gmx_bin_run),
                                 msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
             raise ValueError
         else:
@@ -3783,7 +3890,7 @@ if __name__ == '__main__':
     if arguments.mcs_custom_atommap is not None and not isinstance(arguments.mcs_custom_atommap, dict):
         os_util.local_print('Error while processing mcs_custom_atommap argument or option. It must be a dict relating '
                             'ligand pair names and atom maps. Data read from mcs_custom_atommap was {}. See manual for '
-                            'futher info.'.format(arguments.mcs_custom_atommap),
+                            'further info.'.format(arguments.mcs_custom_atommap),
                             msg_verbosity=os_util.verbosity_level.error, current_verbosity=arguments.verbose)
         raise TypeError()
 
@@ -4190,11 +4297,9 @@ if __name__ == '__main__':
             )
             arguments.extrafiles.extend(copyfiles.keys())
 
+            # Set all residue names for water molecules to SOL
             converted_pdb = all_classes.PDBFile(arguments.structure)
-            for each_residue in converted_pdb.residues:
-                if each_residue.guess_is_water():
-                    each_residue.resname = 'SOL'
-                    each_residue.update_atoms()
+            converted_pdb.set_water_res_name(new_res_name='SOL')
             converted_pdb.to_file(arguments.structure)
 
             os_util.local_print('Generated a topology ({}) and a processed solvated system ({}) for the input'
@@ -4406,23 +4511,32 @@ if __name__ == '__main__':
             this_top_file = os.path.join(base_pert_dir, morph_dir, 'protein', 'FullSystem.top')
 
             # Align ligand
-            add_ligand_to_solvated_receptor(merged_data, arguments.structure,
-                                            output_structure_file=this_struct_file, index_file=arguments.index,
-                                            input_topology=arguments.topology, output_topology_file=this_top_file,
-                                            radius=arguments.presolvated_radius,
-                                            selection_method=arguments.selection_method,
-                                            verbosity=arguments.verbose)
+            add_ligand_to_solvated_receptor(
+                merged_data,
+                arguments.structure,
+                output_structure_file=this_struct_file,
+                index_file=arguments.index,
+                input_topology=arguments.topology,
+                output_topology_file=this_top_file,
+                radius=arguments.presolvated_radius,
+                selection_method=arguments.selection_method,
+                verbosity=arguments.verbose
+            )
 
             # FIXME: run genion here to neutralize the system in a case a user supply a system with a different charge
             #  than the sun system (this should be uncommon)
             water_name = all_classes.TopologyData.detect_solute_molecule_name(
-                input_file=this_top_file, test_sol_molecules=arguments.buildsys_water_mol_name,
-                gmx_bin=arguments.gmx_bin_local, no_checks=arguments.no_checks, verbosity=arguments.verbose
+                input_file=this_top_file,
+                test_sol_molecules=arguments.buildsys_water_mol_name,
+                gmx_bin=arguments.gmx_bin_local,
+                no_checks=arguments.no_checks,
+                verbosity=arguments.verbose
             )
             make_index(new_index_file=this_index, structure_data=this_struct_file, index_data=new_index_groups_dict,
                        method=arguments.selection_method, water_name=water_name, gmx_bin=arguments.gmx_bin_local,
                        verbosity=arguments.verbose)
 
+            arguments.index = 'index.ndx'
             output_structure_file = 'FullSystem.pdb'
             output_topology_file = 'FullSystem.top'
 
@@ -4442,22 +4556,29 @@ if __name__ == '__main__':
                             'pname': arguments.buildsys_pname, 'nname': arguments.buildsys_nname,
                             'box_type': arguments.buildsys_boxtype}
 
-            build_data = prepare_complex_system(structure_file=arguments.structure,
-                                                base_dir=os.path.join(base_pert_dir, morph_dir),
-                                                ligand_dualmol=merged_data,
-                                                topology=arguments.topology, index_file=arguments.index,
-                                                forcefield=arguments.buildsys_forcefield,
-                                                index_groups=new_index_groups_dict,
-                                                selection_method=arguments.selection_method,
-                                                gmx_bin=arguments.gmx_bin_local, extradirs=arguments.extradirs,
-                                                gmx_maxwarn=arguments.gmx_maxwarn, extrafiles=arguments.extrafiles,
-                                                solvate_data=solvate_data, no_checks=arguments.no_checks,
-                                                water_mol_name=arguments.buildsys_water_mol_name,
-                                                verbosity=arguments.verbose)
+            build_data = prepare_complex_system(
+                structure_file=arguments.structure,
+                base_dir=os.path.join(base_pert_dir, morph_dir),
+                ligand_dualmol=merged_data,
+                topology=arguments.topology,
+                index_file=arguments.index,
+                forcefield=arguments.buildsys_forcefield,
+                index_groups=new_index_groups_dict,
+                selection_method=arguments.selection_method,
+                gmx_bin=arguments.gmx_bin_local,
+                extradirs=arguments.extradirs,
+                gmx_maxwarn=arguments.gmx_maxwarn,
+                extrafiles=arguments.extrafiles,
+                solvate_data=solvate_data,
+                no_checks=arguments.no_checks,
+                water_mol_name=arguments.buildsys_water_mol_name,
+                verbosity=arguments.verbose
+            )
             unwanted_files += [os.path.basename(build_data.build_dir)]
             output_structure_file = build_data.structure
             output_topology_file = build_data.topology
             water_name = build_data.water_name
+            arguments.index = build_data.index
 
         protein_topology_files = [os.path.join(base_pert_dir, morph_dir, 'protein', each_file)
                                   for each_file in os.listdir(os.path.join(base_pert_dir, morph_dir, 'protein'))
@@ -4468,13 +4589,18 @@ if __name__ == '__main__':
                         'box_type': arguments.buildsys_boxtype}
 
         # Prepare water perturbations (this is irrespective of whether user used a pre-solvated system or not)
-        water_data = prepare_water_system(dual_molecule_ligand=merged_data,
-                                          water_dir=os.path.join(base_pert_dir, morph_dir, 'water'),
-                                          topology_file=output_topology_file, solvate_data=solvate_data,
-                                          protein_topology_files=protein_topology_files,
-                                          gmx_maxwarn=arguments.gmx_maxwarn, gmx_bin=arguments.gmx_bin_local,
-                                          water_name=water_name, no_checks=arguments.no_checks,
-                                          verbosity=arguments.verbose)
+        water_data = prepare_water_system(
+            dual_molecule_ligand=merged_data,
+            water_dir=os.path.join(base_pert_dir, morph_dir, 'water'),
+            topology_file=output_topology_file,
+            solvate_data=solvate_data,
+            protein_topology_files=protein_topology_files,
+            gmx_maxwarn=arguments.gmx_maxwarn,
+            gmx_bin=arguments.gmx_bin_local,
+            water_name=water_name,
+            no_checks=arguments.no_checks,
+            verbosity=arguments.verbose
+        )
 
         # Create lambda dirs
         for each_system, each_mdplist in mdp_data.items():
@@ -4571,29 +4697,42 @@ if __name__ == '__main__':
 
                 if arguments.solute_scaling == -1:
                     # No solute scaling
-                    equilibration_output.append(prepare_steps(each_value, this_basedir, dir_mdp_list,
-                                                              morph_dir=morph_dir,
-                                                              topology_file=topology_file,
-                                                              structure_file=structure_file,
-                                                              index_file=arguments.index,
-                                                              plumed_conf=plumed_conf,
-                                                              gmx_path=arguments.gmx_bin_run,
-                                                              gmx_maxwarn=arguments.gmx_maxwarn,
-                                                              verbosity=arguments.verbose))
+                    equilibration_output.append(
+                        prepare_steps(
+                            each_value,
+                            this_basedir,
+                            dir_mdp_list,
+                            morph_dir=morph_dir,
+                            topology_file=topology_file,
+                            structure_file=structure_file,
+                            index_file=arguments.index,
+                            plumed_conf=plumed_conf,
+                            gmx_path=arguments.gmx_bin_run,
+                            gmx_maxwarn=arguments.gmx_maxwarn,
+                            verbosity=arguments.verbose
+                        )
+                    )
                 else:
                     # User wants solute scaling
-                    equilibration_output.append(prepare_steps(each_value, this_basedir, dir_mdp_list,
-                                                              morph_dir=morph_dir,
-                                                              topology_file=topology_file,
-                                                              structure_file=structure_file,
-                                                              index_file=arguments.index, scaling_bin=scaling_bin,
-                                                              solute_scaling_list=this_solute_scaling_list,
-                                                              solute_scaling_atoms_dict=solute_scaling_atoms_dict,
-                                                              plumed_conf=plumed_conf,
-                                                              local_gmx_path=arguments.gmx_bin_local,
-                                                              gmx_path=arguments.gmx_bin_run,
-                                                              gmx_maxwarn=arguments.gmx_maxwarn,
-                                                              verbosity=arguments.verbose))
+                    equilibration_output.append(
+                        prepare_steps(
+                            each_value,
+                            this_basedir,
+                            dir_mdp_list,
+                            morph_dir=morph_dir,
+                            topology_file=topology_file,
+                            structure_file=structure_file,
+                            index_file=arguments.index,
+                            scaling_bin=scaling_bin,
+                            solute_scaling_list=this_solute_scaling_list,
+                            solute_scaling_atoms_dict=solute_scaling_atoms_dict,
+                            plumed_conf=plumed_conf,
+                            local_gmx_path=arguments.gmx_bin_local,
+                            gmx_path=arguments.gmx_bin_run,
+                            gmx_maxwarn=arguments.gmx_maxwarn,
+                            verbosity=arguments.verbose
+                        )
+                    )
 
             this_basedir = os.path.join(base_pert_dir, morph_dir, each_system)
             os_util.makedir(os.path.join(this_basedir, 'md'), verbosity=arguments.verbose)

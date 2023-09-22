@@ -126,11 +126,11 @@ def run_gmx(gmx_bin, arg_list, input_data='', output_file=None, alt_environment=
 
     :param str gmx_bin: path to Gromacs binary
     :param list arg_list: pass these args to gmx
-    :param str input_data: data to be send to gmx, empty str (default) to send nothing
+    :param str input_data: data to be sent to gmx, empty str (default) to send nothing
     :param str output_file: save output (stdout + stderr) to this file (default: None = don't save)
     :param dict alt_environment: environment to be passed (on top of current) to Gromacs
     :param str cwd: run in this directory
-    :param bool die_on_error: raise error if command returns a error code
+    :param bool die_on_error: raise error if command returns an error code
     :param int verbosity: verbose level
     """
 

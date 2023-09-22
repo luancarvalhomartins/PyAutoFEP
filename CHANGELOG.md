@@ -2,7 +2,26 @@
 Notable changes to PyAutoFEP will be documented here. As of 2023-08-01, there is no versioned release, so for now major
 changes are referenced by commit. Sorry for this inconvenience.
 
-## [_TBD_] - 2023-08-01
+## [_TBD_] - 2023-09-21
+
+This commit improves handling of pre-solvated systems. `prepare_dual_topology.py` now can correctly handle pre-solvated 
+systems supplied along with topologies that uses a water molecule name different from SOL. Also, topology handling 
+improved allowing for better parse of ParmEd topologies.
+
+### Added
+- 
+
+### Changed
+- In the runscript, call to `mpirun` now uses `--oversubscribe` by default. This prevents errors when running in a 
+  system with fewer CPUs than lambda windows. However, in case there is a problematic configuration, it may be less
+  obvious to spot.
+- Using other residue and molecule names for water molecules in pre-solvated systems now correctly works.
+
+### Fixed
+- Fixed #113
+- Fixed #119
+
+## [2bd9a52] - 2023-08-01
 
 This commit improves handling of pre_solvated systems. First, it adds the internal selection method to 
 `prepare_dual_topology.py`, so that MDAnalysis is no longer required for working with such input. Second, 

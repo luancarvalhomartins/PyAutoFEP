@@ -1056,6 +1056,10 @@ class TopologyData:
             raise ValueError
 
         found_water_molecules = set(molecule_names).intersection(set(test_sol_molecules))
+        # Retry using every possible water mol
+        if len(found_water_molecules) == 0:
+            found_water_molecules = set(molecule_names).intersection(set(water_res_names))
+
         if len(found_water_molecules) == 0:
             # No matches found
             os_util.local_print('None of the water molecules {} was found in file {}. The following molecule names '
@@ -1065,7 +1069,7 @@ class TopologyData:
             raise KeyError("Water molecule not found".format(file_type))
         elif len(found_water_molecules) == 1:
             # Water molecule found, return it
-            return set(molecule_names).intersection(set(test_sol_molecules)).pop()
+            return found_water_molecules.pop()
         else:
             # There are multiple molecules names matching candidates test_sol_molecules
             if no_checks:
@@ -2414,6 +2418,9 @@ class PDBFile:
         def get_atom_names(self):
             return [i.name.replace(' ', '') for i in self]
 
+        def get_atoms_desc(self):
+            return ['{}{}'.format(i.name.replace(' ', ''), i.serial) for i in self]
+
         def update_atoms(self):
             for each_atom in self:
                 each_atom.resname = self.resname
@@ -2621,6 +2628,13 @@ class PDBFile:
                 fh.writelines(output_data)
         else:
             return output_data
+
+    def set_water_res_name(self, new_res_name='SOL'):
+        """ Set the residue names for all waters to new_res_name """
+        for each_residue in self.residues:
+            if each_residue.guess_is_water():
+                each_residue.resname = new_res_name[:3]
+                each_residue.update_atoms()
 
     def __str__(self):
         fname = self.input_file if isinstance(self.input_file, str) else '<DataStream>'
